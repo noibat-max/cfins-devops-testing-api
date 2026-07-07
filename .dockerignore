@@ -1,0 +1,12 @@
+# Not part of the deployed image — provisioning/seed tooling, local env, caches
+scripts/
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+README.md
