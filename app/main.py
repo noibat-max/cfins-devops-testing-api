@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .routers import apps, auth
+from .routers import apps, auth, steps, usecases
 
 logger = logging.getLogger("cfins.api")
 
@@ -34,6 +34,8 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(apps.router)
+app.include_router(usecases.router)
+app.include_router(steps.router)
 
 
 @app.on_event("startup")
