@@ -38,3 +38,9 @@ def get_client():
     resource's document-interface client that auto-serializes native types.
     """
     return _session().client("dynamodb")
+
+
+@functools.lru_cache
+def get_secrets_client():
+    """AWS Secrets Manager client for per-usecase secrets."""
+    return _session().client("secretsmanager")

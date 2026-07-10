@@ -29,6 +29,7 @@ _OPTIONAL_STEP_FIELDS = (
     "validation_type",
     "validation_operator",
     "validation_value",
+    "validation_tolerance",
     "capture_variable",
     "assertion_variable",
     "value_type",
@@ -49,6 +50,7 @@ class StepCreate(BaseModel):
     validation_type: str = ""
     validation_operator: str = ""
     validation_value: str = ""
+    validation_tolerance: str = ""
     capture_variable: str = ""
     assertion_variable: str = ""
     value_type: str = ""
@@ -63,6 +65,7 @@ class StepUpdate(BaseModel):
     validation_type: str | None = None
     validation_operator: str | None = None
     validation_value: str | None = None
+    validation_tolerance: str | None = None
     capture_variable: str | None = None
     assertion_variable: str | None = None
     value_type: str | None = None
@@ -115,6 +118,7 @@ def create_step(usecase_id: str, body: StepCreate) -> dict:
         "validation_type": body.validation_type,
         "validation_operator": body.validation_operator,
         "validation_value": body.validation_value,
+        "validation_tolerance": body.validation_tolerance,
         "capture_variable": body.capture_variable,
         "assertion_variable": body.assertion_variable,
         "value_type": body.value_type,

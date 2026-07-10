@@ -85,6 +85,45 @@ def login(body: LoginRequest) -> LoginResponse:
     )
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@router.post("/change-password")
+def change_password(
+    body: ChangePasswordRequest,
+    principal: Principal = Depends(get_principal),
+) -> dict:
+    """Self-service password change for local users (requires current password)."""
+    user = _get_user(principal.username)
+    stored_hash = user.get("passwordHash", "") if user else ""
+    if not stored_hash:
+        # No local password — e.g. a Cognito/SSO user.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password is managed by your identity provider",
+        )
+    if not bcrypt.checkpw(body.current_password.encode(), stored_hash.encode()):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Current password is incorrect",
+        )
+    if len(body.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters",
+        )
+    get_table().update_item(
+        Key={"pk": "USERS", "sk": f"USER#{principal.username}"},
+        UpdateExpression="SET passwordHash = :h",
+        ExpressionAttributeValues={
+            ":h": bcrypt.hashpw(body.new_password.encode(), bcrypt.gensalt()).decode()
+        },
+    )
+    return {"status": "password changed"}
+
+
 @router.get("/me", response_model=UserOut)
 def me(principal: Principal = Depends(get_principal)) -> UserOut:
     """Identity + freshly-resolved scopes for the bearer token. Requires auth."""

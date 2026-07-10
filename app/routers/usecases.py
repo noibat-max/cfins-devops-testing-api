@@ -23,6 +23,14 @@ from pydantic import BaseModel
 from ..aws import get_table
 from ..security import Principal, require_scopes
 from ..serialization import to_jsonable
+from .config import (
+    delete_all_secrets,
+    list_secret_meta,
+    read_headers,
+    read_variables,
+    write_headers,
+    write_variables,
+)
 
 router = APIRouter(tags=["usecases"])
 
@@ -59,6 +67,7 @@ _STEP_CARRY_FIELDS = (
     "validation_type",
     "validation_operator",
     "validation_value",
+    "validation_tolerance",
     "assertion_variable",
     "value_type",
     "value_source",
@@ -109,11 +118,14 @@ class CloneRequest(BaseModel):
 
 
 class ImportRequest(BaseModel):
-    # Accepts the export envelope; extra keys (variables/secrets/hooks) ignored
-    # until §3 config is ported.
     exportVersion: str | None = None
     usecase: dict = {}
     steps: list[dict] = []
+    variables: list[dict] = []
+    headers: list[dict] = []
+    # Secret keys/descriptions only; values can't round-trip, so import records
+    # them as "pending" (the user must set values) rather than creating them.
+    secrets: list[dict] = []
 
 
 def _get_usecase_item(usecase_id: str) -> dict:
@@ -304,6 +316,11 @@ def delete_usecase(usecase_id: str) -> dict:
         for step in exec_steps.get("Items", []):
             table.delete_item(Key={"pk": step["pk"], "sk": step["sk"]})
 
+    # Cascade: §3 config — variables + headers items (in-table) + secrets (SM).
+    table.delete_item(Key={"pk": f"USECASE#{usecase_id}", "sk": "USECASE_VARIABLES"})
+    table.delete_item(Key={"pk": f"USECASE#{usecase_id}", "sk": "HEADERS"})
+    delete_all_secrets(usecase_id)
+
     return {"status": "usecase deleted", "usecaseId": usecase_id}
 
 
@@ -330,13 +347,17 @@ def export_usecase(usecase_id: str) -> dict:
                 step[field] = s[field]
         steps.append(step)
 
+    # Variables carry full values (plaintext by design). Secrets carry keys +
+    # descriptions ONLY — values live in Secrets Manager and never leave it.
+    secrets = [{"key": s["key"], "description": s.get("description", "")} for s in list_secret_meta(usecase_id)]
+
     export = {
         "exportVersion": EXPORT_VERSION,
         "usecase": clean_usecase,
         "steps": steps,
-        # Empty until §3 (variables/secrets) is ported — keeps the envelope stable.
-        "variables": [],
-        "secrets": [],
+        "variables": read_variables(usecase_id),
+        "headers": read_headers(usecase_id),
+        "secrets": secrets,
     }
     return to_jsonable(export)
 
@@ -371,6 +392,16 @@ def clone_usecase(
 
     for s in _get_sorted_steps(usecase_id):
         _write_step(new_id, s.get("sort", 0), s, now)
+
+    # Copy variables + headers (plaintext, in-table). Secret *values* are not
+    # copied — they never leave Secrets Manager; the clone's Secret steps
+    # reference the same keys, which the author re-creates under the new use case.
+    source_vars = read_variables(usecase_id)
+    if source_vars:
+        write_variables(new_id, source_vars)
+    source_headers = read_headers(usecase_id)
+    if source_headers:
+        write_headers(new_id, source_headers)
 
     return {"success": True, "usecaseId": new_id, "message": "Usecase cloned"}
 
@@ -412,4 +443,17 @@ def import_usecase(
     for i, step in enumerate(body.steps, start=1):
         _write_step(new_id, i, step, now)
 
-    return {"success": True, "usecaseId": new_id, "message": "Usecase imported"}
+    # Variables + headers carry values → restored directly. Secrets carry no
+    # values → reported as pending so the UI can prompt for each one.
+    if body.variables:
+        write_variables(new_id, body.variables)
+    if body.headers:
+        write_headers(new_id, body.headers)
+    secrets_pending = [s.get("key", "") for s in body.secrets if s.get("key")]
+
+    return {
+        "success": True,
+        "usecaseId": new_id,
+        "message": "Usecase imported",
+        "secretsPending": secrets_pending,
+    }

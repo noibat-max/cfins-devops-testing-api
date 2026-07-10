@@ -21,6 +21,11 @@ class Settings:
     aws_region: str = os.environ.get("AWS_REGION", "us-east-1")
     workbench_table: str = os.environ.get("WORKBENCH_TABLE", "cfins-qaworkbench")
 
+    # --- Secrets Manager (per-usecase secrets) ---
+    # Secret names are "<prefix>/usecase/<usecase_id>/<key>". The worker reads the
+    # same name, so this prefix must match its SECRET_PREFIX.
+    secret_prefix: str = os.environ.get("SECRET_PREFIX", "cfins-qaworkbench")
+
     # --- Auth / JWT ---
     # No default for the secret on purpose — a missing secret should be an
     # obvious failure, not a silently-insecure fixed key. Validated in main.

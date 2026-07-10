@@ -43,6 +43,12 @@ def get_group_scopes(*, force: bool = False) -> dict[str, list[str]]:
     return _cache["data"]  # type: ignore[return-value]
 
 
+def bust_cache() -> None:
+    """Force the next resolve to reload from DynamoDB (call after group edits)."""
+    _cache["data"] = None
+    _cache["loaded_at"] = 0.0
+
+
 def resolve_scopes(groups: list[str]) -> list[str]:
     """Union of scopes across the given groups (unknown groups contribute none)."""
     mapping = get_group_scopes()
