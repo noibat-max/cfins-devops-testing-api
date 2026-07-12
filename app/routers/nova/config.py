@@ -21,10 +21,10 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ..aws import get_secrets_client, get_table
-from ..config import get_settings
-from ..security import require_scopes
-from ..serialization import to_jsonable
+from ...aws import get_secrets_client, get_table
+from ...config import get_settings
+from ...security import require_scopes
+from ...serialization import to_jsonable
 
 router = APIRouter(tags=["usecase-config"])
 
@@ -161,7 +161,7 @@ def list_secret_meta(usecase_id: str) -> list[dict]:
 
 @router.get(
     "/usecase/{usecase_id}/variables",
-    dependencies=[Depends(require_scopes("api/usecases.read"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.read"))],
 )
 def get_variables(usecase_id: str) -> dict:
     return {"variables": to_jsonable(read_variables(usecase_id))}
@@ -170,7 +170,7 @@ def get_variables(usecase_id: str) -> dict:
 @router.post(
     "/usecase/{usecase_id}/variables",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def put_variables(usecase_id: str, body: VariablesBody) -> dict:
     variables = write_variables(usecase_id, [v.model_dump() for v in body.variables])
@@ -179,7 +179,7 @@ def put_variables(usecase_id: str, body: VariablesBody) -> dict:
 
 @router.get(
     "/usecase/{usecase_id}/headers",
-    dependencies=[Depends(require_scopes("api/usecases.read"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.read"))],
 )
 def get_headers(usecase_id: str) -> dict:
     return {"headers": to_jsonable(read_headers(usecase_id))}
@@ -188,7 +188,7 @@ def get_headers(usecase_id: str) -> dict:
 @router.post(
     "/usecase/{usecase_id}/headers",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def put_headers(usecase_id: str, body: HeadersBody) -> dict:
     # Values are stored verbatim (static); {{variables}} in them are resolved by
@@ -221,7 +221,7 @@ class SecretDelete(BaseModel):
 
 @router.get(
     "/usecase/{usecase_id}/secrets",
-    dependencies=[Depends(require_scopes("api/usecases.read"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.read"))],
 )
 def list_secrets(usecase_id: str) -> dict:
     return {"secrets": list_secret_meta(usecase_id)}
@@ -229,7 +229,7 @@ def list_secrets(usecase_id: str) -> dict:
 
 @router.post(
     "/usecase/{usecase_id}/secrets",
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def create_secrets(usecase_id: str, body: SecretsBody) -> dict:
     client = get_secrets_client()
@@ -254,7 +254,7 @@ def create_secrets(usecase_id: str, body: SecretsBody) -> dict:
 
 @router.patch(
     "/usecase/{usecase_id}/secrets",
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def update_secret(usecase_id: str, body: SecretUpdate) -> dict:
     if not body.secret_key or not body.value:
@@ -270,7 +270,7 @@ def update_secret(usecase_id: str, body: SecretUpdate) -> dict:
 
 @router.delete(
     "/usecase/{usecase_id}/secrets",
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def delete_secret(usecase_id: str, body: SecretDelete) -> dict:
     if not body.secret_key:
@@ -309,7 +309,7 @@ def delete_all_secrets(usecase_id: str) -> int:
 
 @router.get(
     "/usecase/{usecase_id}/secrets/{secret_key}/value",
-    dependencies=[Depends(require_scopes("api/usecases.read"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.read"))],
 )
 def get_secret_value(usecase_id: str, secret_key: str) -> dict:
     """Worker/internal — the UI never fetches plaintext values."""

@@ -17,6 +17,12 @@ def _split_csv(value: str) -> list[str]:
 class Settings:
     """Resolved once at import; simple attribute access everywhere else."""
 
+    # --- Deployment environment (dev/qa/sat/prod; "local" for dev machines) ---
+    # Stamped onto PATs at creation and checked at auth, so a token minted in one
+    # environment is rejected in another (belt-and-suspenders over the fact that
+    # each environment already has its own table).
+    environment: str = os.environ.get("ENVIRONMENT", "local")
+
     # --- AWS / DynamoDB ---
     aws_region: str = os.environ.get("AWS_REGION", "us-east-1")
     workbench_table: str = os.environ.get("WORKBENCH_TABLE", "cfins-qaworkbench")
@@ -25,6 +31,12 @@ class Settings:
     # Secret names are "<prefix>/usecase/<usecase_id>/<key>". The worker reads the
     # same name, so this prefix must match its SECRET_PREFIX.
     secret_prefix: str = os.environ.get("SECRET_PREFIX", "cfins-qaworkbench")
+
+    # --- S3 (execution artifacts; per-environment bucket) ---
+    # Screenshots/video/traces are stored here and served via presigned URLs.
+    # NOTE: presigned URLs MUST be generated with SigV4 (see app/aws.py) — the
+    # default SigV2 presign signs Content-Type, which breaks client PUTs.
+    artifacts_bucket: str = os.environ.get("ARTIFACTS_BUCKET", "cfins-qaworkbench-local")
 
     # --- Auth / JWT ---
     # No default for the secret on purpose — a missing secret should be an

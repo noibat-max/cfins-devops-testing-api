@@ -20,9 +20,9 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ..aws import get_table
-from ..security import Principal, require_scopes
-from ..serialization import to_jsonable
+from ...aws import get_table
+from ...security import Principal, require_scopes
+from ...serialization import to_jsonable
 from .config import (
     delete_all_secrets,
     list_secret_meta,
@@ -176,7 +176,7 @@ def _write_created_by(usecase_id: str, principal: Principal, now: str) -> None:
     )
 
 
-@router.get("/usecases", dependencies=[Depends(require_scopes("api/usecases.read"))])
+@router.get("/usecases", dependencies=[Depends(require_scopes("api/nova/usecases.read"))])
 def list_usecases() -> dict:
     resp = get_table().query(
         KeyConditionExpression=Key("pk").eq("USECASES") & Key("sk").begins_with("USECASE#")
@@ -187,7 +187,7 @@ def list_usecases() -> dict:
 @router.post("/usecase", status_code=status.HTTP_201_CREATED)
 def create_usecase(
     body: UsecaseCreate,
-    principal: Principal = Depends(require_scopes("api/usecases.write")),
+    principal: Principal = Depends(require_scopes("api/nova/usecases.write")),
 ) -> dict:
     table = get_table()
     usecase_id = str(uuid.uuid4())
@@ -226,7 +226,7 @@ def create_usecase(
 
 @router.get(
     "/usecase/{usecase_id}",
-    dependencies=[Depends(require_scopes("api/usecases.read"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.read"))],
 )
 def get_usecase(usecase_id: str) -> dict:
     resp = get_table().get_item(Key={"pk": "USECASES", "sk": f"USECASE#{usecase_id}"})
@@ -239,7 +239,7 @@ def get_usecase(usecase_id: str) -> dict:
 
 @router.patch(
     "/usecase/{usecase_id}",
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def update_usecase(usecase_id: str, body: UsecaseUpdate) -> dict:
     provided = body.model_dump(exclude_unset=True)
@@ -285,7 +285,7 @@ def update_usecase(usecase_id: str, body: UsecaseUpdate) -> dict:
 
 @router.delete(
     "/usecase/{usecase_id}",
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def delete_usecase(usecase_id: str) -> dict:
     table = get_table()
@@ -326,7 +326,7 @@ def delete_usecase(usecase_id: str) -> dict:
 
 @router.get(
     "/usecase/{usecase_id}/export",
-    dependencies=[Depends(require_scopes("api/usecases.read"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.read"))],
 )
 def export_usecase(usecase_id: str) -> dict:
     usecase = _get_usecase_item(usecase_id)
@@ -366,7 +366,7 @@ def export_usecase(usecase_id: str) -> dict:
 def clone_usecase(
     usecase_id: str,
     body: CloneRequest,
-    principal: Principal = Depends(require_scopes("api/usecases.write")),
+    principal: Principal = Depends(require_scopes("api/nova/usecases.write")),
 ) -> dict:
     if not body.name.strip():
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Name is required")
@@ -409,7 +409,7 @@ def clone_usecase(
 @router.post("/import", status_code=status.HTTP_201_CREATED)
 def import_usecase(
     body: ImportRequest,
-    principal: Principal = Depends(require_scopes("api/usecases.write")),
+    principal: Principal = Depends(require_scopes("api/nova/usecases.write")),
 ) -> dict:
     if body.exportVersion != EXPORT_VERSION:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unsupported export version")

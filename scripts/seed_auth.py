@@ -37,17 +37,17 @@ GROUPS = {
     "author": {
         "description": "Create, edit and run tests",
         "scopes": [
-            "api/usecases.read", "api/usecases.write", "api/usecases.execute",
-            "api/templates.read", "api/templates.write",
-            "api/executions.read", "api/executions.write",
-            "api/suite.read", "api/suite.write",
+            "api/nova/usecases.read", "api/nova/usecases.write", "api/nova/usecases.execute",
+            "api/nova/templates.read", "api/nova/templates.write",
+            "api/nova/executions.read", "api/nova/executions.write",
+            "api/nova/suite.read", "api/nova/suite.write",
         ],
     },
     "viewer": {
         "description": "Read-only: view tests and results, cannot run",
         "scopes": [
-            "api/usecases.read", "api/templates.read",
-            "api/executions.read", "api/suite.read",
+            "api/nova/usecases.read", "api/nova/templates.read",
+            "api/nova/executions.read", "api/nova/suite.read",
         ],
     },
 }

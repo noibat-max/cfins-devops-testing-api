@@ -7,12 +7,26 @@ which declare their required scope via `require_scopes(event, [...])`).
 **Totals:** 105 API Gateway routes across 84 resources (GET 42 · POST 37 · DELETE 12 · PATCH 11 · PUT 3).
 Every route is authorized by the Cognito Lambda authorizer + a per-handler scope check.
 
-This is the **parity checklist**: each row becomes a FastAPI route in `app/routers/`.
+This is the **parity checklist**: each row becomes a FastAPI route in `app/routers/nova/`
+(QA Studio handlers; workbench-shell routers live in `app/routers/shell/`).
 Legend: **IN** = port for parity · **OUT** = excluded by a recorded decision ·
 **PROD** = prod-only, stub locally.
 
-Scopes in our model (seeded): `usecases.read/write/execute`, `templates.read/write`,
-`executions.read/write`, `suite.read/write`, `api/admin` (inherits all). The sample's
+> **Route namespacing (app-owns-/api).** The paths below are the sample's bare
+> paths. In our multi-app workbench every functional route is served under
+> **`/api`**, and QA Studio (Nova Act) — the app these rows belong to — lives
+> under **`/api/nova`**. So e.g. `GET /usecases` → **`GET /api/nova/usecases`**,
+> `POST /import` → **`POST /api/nova/import`**. Workbench-shell routes (auth,
+> apps, users, groups, tokens) sit directly under `/api` (no `/nova`).
+> `/health` + `/docs` stay at root. Future apps get their own segment
+> (`/api/dlt`, …). The tables keep the bare paths for 1:1 traceability to the
+> sample; mentally prepend `/api/nova`.
+
+Scopes in our model are **app-namespaced** (mirror the route prefix): QA Studio scopes
+are `api/nova/usecases.read/write/execute`, `api/nova/templates.read/write`,
+`api/nova/executions.read/write`, `api/nova/suite.read/write`; `api/admin` is the cross-app
+super-scope (inherits all, not app-specific). The Scope column below uses the short
+form (`usecases.read`) — read it as **`api/nova/usecases.read`**. The sample's
 `oauth-clients.*` scopes are **dropped** (see OAuth Clients below).
 
 ---

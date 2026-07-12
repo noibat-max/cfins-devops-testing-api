@@ -17,9 +17,10 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ..aws import get_table
-from ..groups import get_group_scopes
-from ..security import Principal, require_scopes
+from ... import pat
+from ...aws import get_table
+from ...groups import get_group_scopes
+from ...security import Principal, require_scopes
 
 router = APIRouter(tags=["users"])
 
@@ -206,6 +207,9 @@ def update_user(
         ExpressionAttributeNames=names,
         ExpressionAttributeValues=values,
     )
+    # Disabling a user kills their PATs too (PAT auth doesn't re-check status).
+    if provided.get("status") == "disabled":
+        pat.revoke_all_for_user(username)
     return _public(_get_user_item(username))
 
 
@@ -232,5 +236,6 @@ def delete_user(
     principal: Principal = Depends(require_scopes("api/admin")),
 ) -> dict:
     _forbid_self(username, principal)  # can't delete your own account
+    revoked = pat.revoke_all_for_user(username)  # tokens die with the user
     get_table().delete_item(Key={"pk": "USERS", "sk": f"USER#{username}"})
-    return {"status": "user deleted", "username": username}
+    return {"status": "user deleted", "username": username, "tokensRevoked": revoked}

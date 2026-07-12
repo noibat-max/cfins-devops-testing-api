@@ -18,10 +18,10 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ..aws import get_table
-from ..groups import bust_cache
-from ..scopes import ADMIN_SCOPE, SCOPE_CATALOG, VALID_SCOPES
-from ..security import require_scopes
+from ...aws import get_table
+from ...groups import bust_cache
+from ...scopes import ADMIN_SCOPE, SCOPE_CATALOG, VALID_SCOPES
+from ...security import require_scopes
 
 router = APIRouter(tags=["groups"])
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import functools
 
 import boto3
+from botocore.config import Config
 
 from .config import get_settings
 
@@ -44,3 +45,16 @@ def get_client():
 def get_secrets_client():
     """AWS Secrets Manager client for per-usecase secrets."""
     return _session().client("secretsmanager")
+
+
+@functools.lru_cache
+def get_s3_client():
+    """S3 client for execution artifacts, configured for **SigV4** presigning.
+
+    SigV4 is REQUIRED, not optional: the default (SigV2) presigned URL bakes the
+    `Content-Type` into the signature, so a client PUT that sends any content
+    type fails with SignatureDoesNotMatch (403). SigV4 doesn't sign Content-Type
+    unless explicitly included, so the CLI can upload with any type. Verified
+    end-to-end against the real bucket — see CLAUDE.md §5 / scripts/provision_s3.py.
+    """
+    return _session().client("s3", config=Config(signature_version="s3v4"))

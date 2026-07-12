@@ -12,7 +12,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .routers import apps, auth, config, groups, steps, usecases, users
+from .routers.nova import config, executions, steps, usecases
+from .routers.shell import apps, auth, groups, tokens, users
 
 logger = logging.getLogger("cfins.api")
 
@@ -32,13 +33,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router)
-app.include_router(apps.router)
-app.include_router(usecases.router)
-app.include_router(steps.router)
-app.include_router(config.router)
-app.include_router(users.router)
-app.include_router(groups.router)
+# Route namespacing (app-owns-/api): every functional route is served under
+# `/api`; each hosted application gets its own second segment. QA Studio (Nova
+# Act) lives under `/api/nova`; the workbench shell (auth, apps, admin, tokens)
+# is app-agnostic and sits directly under `/api`. `/health` + `/docs` stay at
+# root (load-balancer / Swagger convention). Future apps: `/api/dlt`, ...
+API = "/api"
+NOVA = f"{API}/nova"
+
+# Workbench shell — app-agnostic platform routes.
+app.include_router(auth.router, prefix=API)
+app.include_router(apps.router, prefix=API)
+app.include_router(users.router, prefix=API)
+app.include_router(groups.router, prefix=API)
+app.include_router(tokens.router, prefix=API)
+
+# QA Studio (Nova Act) application.
+app.include_router(usecases.router, prefix=NOVA)
+app.include_router(steps.router, prefix=NOVA)
+app.include_router(config.router, prefix=NOVA)
+app.include_router(executions.router, prefix=NOVA)
 
 
 @app.on_event("startup")

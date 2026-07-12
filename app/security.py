@@ -12,6 +12,7 @@ is identical regardless of how the user logged in.
 """
 from __future__ import annotations
 
+import datetime
 import logging
 from dataclasses import dataclass
 
@@ -19,7 +20,7 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from . import cognito
+from . import cognito, pat
 from .config import get_settings
 from .groups import resolve_scopes
 
@@ -47,6 +48,13 @@ class Principal:
     display_name: str
     groups: list[str]
     scopes: list[str]
+    # How this request authenticated: "local"/"cognito" (a human JWT) or "pat"
+    # (a Personal Access Token). Gates token management to human logins.
+    provider: str = "local"
+
+
+def _utcnow_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _decode(token: str) -> tuple[dict, str]:
@@ -105,6 +113,12 @@ def get_principal(
         raise _UNAUTHENTICATED
 
     token = creds.credentials
+
+    # PATs are opaque (not JWTs) so they can't be routed by `iss`; catch them
+    # first by their `qapat_` prefix, before the JWT decode path.
+    if token.startswith(pat.PAT_PREFIX):
+        return _principal_from_pat(token)
+
     claims, provider = _decode(token)
 
     if provider == "cognito":
@@ -125,6 +139,39 @@ def get_principal(
         display_name=display_name,
         groups=groups,
         scopes=resolve_scopes(groups),  # per-request, from the cached mapping
+        provider=provider,
+    )
+
+
+def _principal_from_pat(token: str) -> Principal:
+    """Authenticate an opaque PAT: hash → lookup → expiry → env stamp.
+
+    Unlike the JWT paths, a PAT's scopes are the SNAPSHOT taken at creation
+    (frozen power), NOT re-resolved from groups. Any failure is a generic 401.
+    """
+    item = pat.get_auth_item(token)
+    if not item:
+        raise _UNAUTHENTICATED
+
+    expires_at = item.get("expiresAt")
+    # Fixed-format UTC ISO strings compare chronologically as plain strings.
+    if expires_at and _utcnow_iso() >= str(expires_at):
+        raise _UNAUTHENTICATED
+
+    token_env = item.get("env")
+    if token_env and token_env != get_settings().environment:
+        logger.debug(
+            "PAT env mismatch: token=%r api=%r", token_env, get_settings().environment
+        )
+        raise _UNAUTHENTICATED
+
+    return Principal(
+        username=item.get("username", ""),
+        email=item.get("email", ""),
+        display_name=item.get("displayName", ""),
+        groups=list(item.get("groups", [])),
+        scopes=list(item.get("scopes", [])),  # snapshot — NOT resolve_scopes
+        provider="pat",
     )
 
 

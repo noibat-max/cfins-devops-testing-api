@@ -13,10 +13,10 @@ import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ..aws import get_table
-from ..groups import resolve_scopes
-from ..security import Principal, get_principal
-from ..tokens import mint_token
+from ...aws import get_table
+from ...groups import resolve_scopes
+from ...security import Principal, get_principal
+from ...tokens import mint_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

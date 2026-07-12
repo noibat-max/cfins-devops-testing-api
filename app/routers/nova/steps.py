@@ -17,9 +17,9 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ..aws import get_client, get_table
-from ..security import require_scopes
-from ..serialization import to_jsonable
+from ...aws import get_client, get_table
+from ...security import require_scopes
+from ...serialization import to_jsonable
 
 router = APIRouter(tags=["steps"])
 
@@ -84,7 +84,7 @@ class ReorderRequest(BaseModel):
 
 @router.get(
     "/usecase/{usecase_id}/steps",
-    dependencies=[Depends(require_scopes("api/usecases.read"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.read"))],
 )
 def list_steps(usecase_id: str) -> dict:
     resp = get_table().query(
@@ -103,7 +103,7 @@ def list_steps(usecase_id: str) -> dict:
 @router.post(
     "/usecase/{usecase_id}/steps",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def create_step(usecase_id: str, body: StepCreate) -> dict:
     step_id = str(uuid.uuid4())
@@ -132,7 +132,7 @@ def create_step(usecase_id: str, body: StepCreate) -> dict:
 
 @router.patch(
     "/usecase/{usecase_id}/steps/reorder",
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def reorder_steps(usecase_id: str, body: ReorderRequest) -> dict:
     if not body.step_orders:
@@ -171,7 +171,7 @@ def reorder_steps(usecase_id: str, body: ReorderRequest) -> dict:
 
 @router.patch(
     "/usecase/{usecase_id}/steps/{step_id}",
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def update_step(usecase_id: str, step_id: str, body: StepUpdate) -> dict:
     set_parts = ["instruction = :instruction", "step_type = :step_type"]
@@ -201,7 +201,7 @@ def update_step(usecase_id: str, step_id: str, body: StepUpdate) -> dict:
 
 @router.delete(
     "/usecase/{usecase_id}/steps/{step_id}",
-    dependencies=[Depends(require_scopes("api/usecases.write"))],
+    dependencies=[Depends(require_scopes("api/nova/usecases.write"))],
 )
 def delete_step(usecase_id: str, step_id: str) -> dict:
     get_table().delete_item(
