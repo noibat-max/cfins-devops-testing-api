@@ -336,13 +336,23 @@ class ArtifactCreate(BaseModel):
 
 
 def _mint_artifact(usecase_id: str, eid: str, body: ArtifactCreate, step_id: str | None) -> dict:
-    _get_execution_or_404(usecase_id, eid)
+    execution = _get_execution_or_404(usecase_id, eid)
     fname = body.filename.strip().lstrip("/").replace("..", "")
     if not fname:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "filename is required")
 
     aid = str(uuid.uuid4())
-    key = f"executions/{eid}/{aid}/{fname}"
+    # Path: executions/nova/<date>/<eid>/<file>.
+    #  - "nova" segregates this app's runs (mirrors the /api/nova route + scope
+    #    namespacing); future apps get executions/<app>/...
+    #  - <date> partitions by run day so developers can narrow browsing and
+    #    lifecycle rules can expire old runs by prefix.
+    #  - date comes from the execution's createdAt (NOT "now"), so every artifact
+    #    of a run — even one spanning midnight UTC — shares one day folder.
+    # All of a run's artifacts share one folder; filenames from the runner are
+    # already unique within a run, and the artifact id stays the DynamoDB key.
+    run_date = (execution.get("createdAt") or _now())[:10]  # YYYY-MM-DD (UTC)
+    key = f"executions/nova/{run_date}/{eid}/{fname}"
     item = {
         "pk": f"EXECUTION#{eid}",
         "sk": f"ARTIFACT#{aid}",
