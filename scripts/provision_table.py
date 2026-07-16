@@ -4,9 +4,14 @@ Provision the single DynamoDB table for QA Workbench.
 
 Single-table design (matches sample-qa-studio): one table, `pk`/`sk` composite
 keys, plus the `suite-execution-index` GSI. All entities (users, groups, and
-later usecases/steps/suites/executions) live in this one table.
+later usecases/steps/suites/executions/audit) live in this one table.
 
-Idempotent — safe to re-run; it no-ops if the table already exists.
+Also enables **DynamoDB TTL** on the `ttl` attribute — audit-log items (and any
+future ephemeral items) carry `ttl` = a Unix-epoch-seconds expiry, and DynamoDB
+auto-deletes them ~within 48h of that time. TTL is enabled on every run.
+
+Idempotent — safe to re-run; it no-ops if the table already exists, and re-checks
+TTL each time.
 
 Run locally against real AWS via the cfins-local profile:
 
@@ -29,6 +34,7 @@ from botocore.exceptions import ClientError
 
 TABLE = os.environ.get("WORKBENCH_TABLE", "cfins-qaworkbench")
 REGION = os.environ.get("AWS_REGION", "us-east-1")
+TTL_ATTR = "ttl"  # must match app/audit.py's item attribute name
 
 ddb = boto3.client("dynamodb", region_name=REGION)
 
@@ -43,13 +49,7 @@ def table_exists() -> bool:
         raise
 
 
-def main() -> int:
-    print(f"Target: table '{TABLE}' in {REGION}")
-
-    if table_exists():
-        print(f"✅ Table '{TABLE}' already exists — nothing to do (idempotent).")
-        return 0
-
+def create_table() -> None:
     print(f"Creating table '{TABLE}' ...")
     ddb.create_table(
         TableName=TABLE,
@@ -74,7 +74,6 @@ def main() -> int:
             }
         ],
     )
-
     print("Waiting for table to become ACTIVE ...")
     ddb.get_waiter("table_exists").wait(TableName=TABLE)
 
@@ -92,7 +91,58 @@ def main() -> int:
     else:
         print("PITR skipped (set ENABLE_PITR=true in prod to enable).")
 
-    print(f"✅ Table '{TABLE}' is ready (pk/sk + suite-execution-index, PAY_PER_REQUEST).")
+
+def ensure_ttl() -> None:
+    """Enable TTL on the `ttl` attribute (idempotent, best-effort).
+
+    Skips if already enabled on the right attribute; warns (doesn't fail) if the
+    cfins-local policy denies Describe/UpdateTimeToLive — the `ttl` values are
+    written regardless, so an admin can enable it later with one CLI call.
+    """
+    # Already enabled on the right attribute? then nothing to do.
+    try:
+        desc = ddb.describe_time_to_live(TableName=TABLE)["TimeToLiveDescription"]
+        status, attr = desc.get("TimeToLiveStatus"), desc.get("AttributeName")
+        if status in ("ENABLED", "ENABLING"):
+            if attr == TTL_ATTR:
+                print(f"TTL already {status.lower()} on '{TTL_ATTR}' — nothing to do.")
+            else:
+                print(f"WARN: TTL is {status.lower()} on a DIFFERENT attribute "
+                      f"({attr!r}); expected {TTL_ATTR!r}. Audit items will NOT expire.")
+            return
+    except ClientError as e:
+        # Can't read it (e.g. AccessDenied) — fall through and try to enable anyway.
+        if e.response["Error"]["Code"] != "AccessDeniedException":
+            print(f"WARN: could not read TTL status ({e.response['Error']['Code']}).")
+
+    try:
+        ddb.update_time_to_live(
+            TableName=TABLE,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": TTL_ATTR},
+        )
+        print(f"✅ TTL enabled on '{TTL_ATTR}' — items with a past `ttl` epoch auto-expire (~48h).")
+    except ClientError as e:
+        msg = e.response["Error"].get("Message", "")
+        if "already enabled" in msg.lower():
+            print(f"TTL already enabled on '{TTL_ATTR}'.")
+        else:
+            print(f"WARN: could not enable TTL ({e.response['Error']['Code']}). Enable it manually:\n"
+                  f"  aws dynamodb update-time-to-live --table-name {TABLE} "
+                  f"--time-to-live-specification 'Enabled=true,AttributeName={TTL_ATTR}'")
+
+
+def main() -> int:
+    print(f"Target: table '{TABLE}' in {REGION}")
+
+    if table_exists():
+        print(f"Table '{TABLE}' already exists (idempotent).")
+    else:
+        create_table()
+        print(f"Table '{TABLE}' created (pk/sk + suite-execution-index, PAY_PER_REQUEST).")
+
+    # Always (re)check TTL — required by audit-log retention.
+    ensure_ttl()
+    print("✅ Provisioning complete.")
     return 0
 
 

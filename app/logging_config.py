@@ -88,6 +88,16 @@ def set_log_user(username: str) -> None:
         _user_by_cid[cid] = username or _UNSET
 
 
+def get_log_user() -> str:
+    """The authenticated user bound to the current request (or `-` pre-auth).
+
+    Resolved by correlation id from the map get_principal populates — the same
+    source the ContextFilter uses. Read it in-request (e.g. audit middleware,
+    before RequestLogMiddleware drops the entry).
+    """
+    return _user_by_cid.get(_correlation_id.get(), _UNSET)
+
+
 class ContextFilter(logging.Filter):
     """Inject the current correlation id + user onto every record."""
 

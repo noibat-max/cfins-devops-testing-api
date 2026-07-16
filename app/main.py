@@ -17,10 +17,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .audit import AuditMiddleware
 from .config import get_settings
 from .logging_config import RequestLogMiddleware, configure_logging
 from .routers.nova import config, executions, steps, usecases
-from .routers.shell import apps, auth, groups, tokens, users
+from .routers.shell import apps, audit, auth, groups, tokens, users
 
 settings = get_settings()
 
@@ -43,6 +44,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Audit trail: records every mutating request (payload redacted) to DynamoDB.
+# Added BEFORE RequestLogMiddleware so it stays INNER — its recording runs while
+# the correlation id is still bound and the auth-resolved user is still in the
+# per-cid map (RequestLogMiddleware, outermost, drops that entry last).
+app.add_middleware(AuditMiddleware)
 
 # Added last → outermost: binds the correlation id before anything else runs and
 # logs one line per request (with the user, once auth resolves it downstream).
@@ -87,6 +94,7 @@ app.include_router(apps.router, prefix=API)
 app.include_router(users.router, prefix=API)
 app.include_router(groups.router, prefix=API)
 app.include_router(tokens.router, prefix=API)
+app.include_router(audit.router, prefix=API)
 
 # QA Studio (Nova Act) application.
 app.include_router(usecases.router, prefix=NOVA)
