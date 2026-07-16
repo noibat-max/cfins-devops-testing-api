@@ -10,6 +10,7 @@ once, at creation; only its hash is stored.
 from __future__ import annotations
 
 import datetime
+import logging
 import secrets
 
 from boto3.dynamodb.conditions import Key
@@ -20,6 +21,8 @@ from ... import pat
 from ...aws import get_table
 from ...config import get_settings
 from ...security import Principal, get_principal
+
+logger = logging.getLogger("cfins.tokens")
 
 router = APIRouter(prefix="/me/tokens", tags=["tokens"])
 
@@ -119,6 +122,8 @@ def create_token(
     table.put_item(Item=list_item)
     table.put_item(Item=auth_item)
 
+    logger.info("PAT %s (%r) created for %s (expires %s)",
+                token_id, name, principal.username, expires_at)
     return {"token": raw, **_meta(list_item)}
 
 
@@ -150,4 +155,5 @@ def revoke_token(
     if token_hash:  # kill the AUTH item first — that's what makes it work
         table.delete_item(Key={"pk": f"PAT#{token_hash}", "sk": "TOKEN"})
     table.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+    logger.info("PAT %s (%r) revoked by %s", token_id, item.get("name", ""), principal.username)
     return {"status": "revoked", "id": token_id}

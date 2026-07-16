@@ -13,6 +13,7 @@ dropped (out of scope) — test_platform is always "web".
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 
 from boto3.dynamodb.conditions import Key
@@ -23,6 +24,8 @@ from pydantic import BaseModel
 from ...aws import get_table
 from ...security import Principal, require_scopes
 from ...serialization import to_jsonable
+
+logger = logging.getLogger("cfins.nova.usecases")
 from .config import (
     delete_all_secrets,
     list_secret_meta,
@@ -203,6 +206,7 @@ def create_usecase(
         "active": body.active,
         "tags": body.tags,
         "created_at": now,
+        "created_by": principal.username,
         "executing_region": body.executing_region or DEFAULT_REGION,
         "model_id": body.model_id or DEFAULT_MODEL,
         "enable_cache": body.enableCache,
@@ -221,6 +225,7 @@ def create_usecase(
     )
 
     item["enableCache"] = item["enable_cache"]
+    logger.info("usecase %s created (%r)", usecase_id, body.name)
     return item
 
 
@@ -321,6 +326,8 @@ def delete_usecase(usecase_id: str) -> dict:
     table.delete_item(Key={"pk": f"USECASE#{usecase_id}", "sk": "HEADERS"})
     delete_all_secrets(usecase_id)
 
+    logger.info("usecase %s deleted (cascade: %d step(s), %d execution(s))",
+                usecase_id, len(steps.get("Items", [])), len(execs.get("Items", [])))
     return {"status": "usecase deleted", "usecaseId": usecase_id}
 
 
@@ -381,6 +388,7 @@ def clone_usecase(
         "id": new_id,
         "name": body.name,
         "created_at": now,
+        "created_by": principal.username,
     }
     for field in _CLONE_COPY_FIELDS:
         if field in source:
@@ -403,6 +411,7 @@ def clone_usecase(
     if source_headers:
         write_headers(new_id, source_headers)
 
+    logger.info("usecase %s cloned from %s (%r)", new_id, usecase_id, body.name)
     return {"success": True, "usecaseId": new_id, "message": "Usecase cloned"}
 
 
@@ -435,6 +444,7 @@ def import_usecase(
         "tags": tags,
         "test_platform": data.get("test_platform", "web") or "web",
         "created_at": now,
+        "created_by": principal.username,
     }
     get_table().put_item(Item=new_usecase)
     _write_created_by(new_id, principal, now)
@@ -451,6 +461,8 @@ def import_usecase(
         write_headers(new_id, body.headers)
     secrets_pending = [s.get("key", "") for s in body.secrets if s.get("key")]
 
+    logger.info("usecase %s imported (%d step(s), %d secret(s) pending)",
+                new_id, len(body.steps), len(secrets_pending))
     return {
         "success": True,
         "usecaseId": new_id,

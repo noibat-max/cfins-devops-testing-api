@@ -23,6 +23,13 @@ class Settings:
     # each environment already has its own table).
     environment: str = os.environ.get("ENVIRONMENT", "local")
 
+    # --- Diagnostic logging ---
+    # LOG_LEVEL tunes our `cfins.*` loggers (DEBUG for a full trace, WARNING to
+    # quiet down). LOG_FORMAT is "json" (default; queryable in CloudWatch Logs
+    # Insights) or "plain" (readable locally — set in .env). See logging_config.
+    log_level: str = os.environ.get("LOG_LEVEL", "INFO").upper()
+    log_format: str = os.environ.get("LOG_FORMAT", "json").lower()
+
     # --- AWS / DynamoDB ---
     aws_region: str = os.environ.get("AWS_REGION", "us-east-1")
     workbench_table: str = os.environ.get("WORKBENCH_TABLE", "cfins-qaworkbench")

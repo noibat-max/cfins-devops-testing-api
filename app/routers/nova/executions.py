@@ -17,6 +17,7 @@ view, video, downloads, events, step trace.
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 
 from boto3.dynamodb.conditions import Key
@@ -28,6 +29,8 @@ from ...aws import get_s3_client, get_table
 from ...config import get_settings
 from ...security import Principal, require_scopes
 from ...serialization import to_jsonable
+
+logger = logging.getLogger("cfins.nova.executions")
 
 router = APIRouter(tags=["executions"])
 
@@ -137,6 +140,8 @@ def execute(
         "stopRequested": False,
     }
     get_table().put_item(Item=item)
+    logger.info("execution %s created for usecase %s (mode=local, trigger=%s)",
+                eid, usecase_id, item["trigger"])
     return {"executionId": eid, "status": "pending", "mode": "local"}
 
 
@@ -188,6 +193,8 @@ def delete_execution(
     table.delete_item(
         Key={"pk": f"USECASE_EXECUTION#{usecase_id}", "sk": f"EXECUTION#{eid}"}
     )
+    logger.info("execution %s deleted (cascade: %d child item(s), %d S3 object(s))",
+                eid, len(children), artifacts_deleted)
     return {"status": "deleted", "executionId": eid, "artifactsDeleted": artifacts_deleted}
 
 
@@ -212,6 +219,7 @@ def stop_execution(
         values[":st"] = "stopped"
         values[":e"] = _now()
     _update(f"USECASE_EXECUTION#{usecase_id}", f"EXECUTION#{eid}", set_parts, names, values)
+    logger.info("execution %s stop requested (was %s)", eid, item.get("status"))
     return {"status": "stop requested", "executionId": eid}
 
 
@@ -246,6 +254,7 @@ def update_execution_status(
         values[":em"] = body.errorMessage
 
     _update(f"USECASE_EXECUTION#{usecase_id}", f"EXECUTION#{eid}", set_parts, names, values)
+    logger.info("execution %s -> %s", eid, body.status)
     return {"executionId": eid, "status": body.status}
 
 
@@ -292,6 +301,7 @@ def update_step_status(
 
     # upsert (no existence guard — the first callback creates the row)
     _update(f"EXECUTION#{eid}", f"EXECUTION_STEP#{step_id}", set_parts, names, values)
+    logger.debug("execution %s step %s -> %s", eid, step_id, body.status)
     return {"stepId": step_id, "status": body.status}
 
 
@@ -425,6 +435,7 @@ def confirm_artifact(
         set_parts.append("sizeBytes = :sz")
         values[":sz"] = body.sizeBytes
     _update(f"EXECUTION#{eid}", f"ARTIFACT#{aid}", set_parts, names, values)
+    logger.info("execution %s artifact %s confirmed (%s)", eid, aid, values[":s"])
     return {"artifactId": aid, "status": values[":s"]}
 
 

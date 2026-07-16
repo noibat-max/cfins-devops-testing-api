@@ -10,6 +10,7 @@ your own password via POST /auth/change-password instead.
 from __future__ import annotations
 
 import datetime
+import logging
 
 import bcrypt
 from boto3.dynamodb.conditions import Key
@@ -21,6 +22,8 @@ from ... import pat
 from ...aws import get_table
 from ...groups import get_group_scopes
 from ...security import Principal, require_scopes
+
+logger = logging.getLogger("cfins.admin.users")
 
 router = APIRouter(tags=["users"])
 
@@ -147,6 +150,8 @@ def create_user(body: UserCreate) -> dict:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             raise HTTPException(status.HTTP_409_CONFLICT, "User already exists")
         raise
+    logger.info("user %s created (groups: %s, status: %s)",
+                username, ",".join(body.groups) or "(none)", body.status)
     return _public(item)
 
 
@@ -172,6 +177,7 @@ def set_user_password(
         UpdateExpression="SET passwordHash = :h",
         ExpressionAttributeValues={":h": _hash(body.password)},
     )
+    logger.info("user %s password reset by %s", username, principal.username)
     return {"status": "password updated", "username": username}
 
 
@@ -210,6 +216,7 @@ def update_user(
     # Disabling a user kills their PATs too (PAT auth doesn't re-check status).
     if provided.get("status") == "disabled":
         pat.revoke_all_for_user(username)
+    logger.info("user %s updated (%s)", username, ", ".join(provided.keys()))
     return _public(_get_user_item(username))
 
 
@@ -227,6 +234,8 @@ def set_user_groups(
         UpdateExpression="SET groups = :g",
         ExpressionAttributeValues={":g": body.groups},
     )
+    logger.info("user %s groups set to [%s] by %s",
+                username, ",".join(body.groups) or "(none)", principal.username)
     return {"status": "groups updated", "username": username, "groups": body.groups}
 
 
@@ -238,4 +247,5 @@ def delete_user(
     _forbid_self(username, principal)  # can't delete your own account
     revoked = pat.revoke_all_for_user(username)  # tokens die with the user
     get_table().delete_item(Key={"pk": "USERS", "sk": f"USER#{username}"})
+    logger.info("user %s deleted by %s (%d token(s) revoked)", username, principal.username, revoked)
     return {"status": "user deleted", "username": username, "tokensRevoked": revoked}

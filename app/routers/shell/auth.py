@@ -9,6 +9,8 @@ GET /auth/me and the scope-enforcing middleware arrive in Phase 4.
 """
 from __future__ import annotations
 
+import logging
+
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -17,6 +19,8 @@ from ...aws import get_table
 from ...groups import resolve_scopes
 from ...security import Principal, get_principal
 from ...tokens import mint_token
+
+logger = logging.getLogger("cfins.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -54,13 +58,17 @@ def login(body: LoginRequest) -> LoginResponse:
     user = _get_user(body.username)
 
     # Uniform failure path: unknown user, inactive user, or bad password all 401.
+    # Clients get a generic message; the internal log keeps the reason (never the
+    # password) so we can diagnose / spot failed-login patterns.
     if not user or user.get("status") != "active":
+        logger.warning("login failed for %r (unknown or inactive user)", body.username)
         raise _INVALID
 
     stored_hash = user.get("passwordHash", "")
     if not stored_hash or not bcrypt.checkpw(
         body.password.encode(), stored_hash.encode()
     ):
+        logger.warning("login failed for %r (bad password)", body.username)
         raise _INVALID
 
     groups = list(user.get("groups", []))
@@ -73,6 +81,7 @@ def login(body: LoginRequest) -> LoginResponse:
         groups=groups,
     )
 
+    logger.info("login succeeded for %s (groups: %s)", user["username"], ",".join(groups) or "(none)")
     return LoginResponse(
         token=token,
         user=UserOut(
@@ -121,6 +130,7 @@ def change_password(
             ":h": bcrypt.hashpw(body.new_password.encode(), bcrypt.gensalt()).decode()
         },
     )
+    logger.info("password changed for %s (self-service)", principal.username)
     return {"status": "password changed"}
 
 

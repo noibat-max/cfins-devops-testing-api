@@ -10,6 +10,7 @@ worker reads the same shape.
 from __future__ import annotations
 
 import datetime
+import logging
 import uuid
 
 from boto3.dynamodb.conditions import Key
@@ -20,6 +21,8 @@ from pydantic import BaseModel
 from ...aws import get_client, get_table
 from ...security import require_scopes
 from ...serialization import to_jsonable
+
+logger = logging.getLogger("cfins.nova.steps")
 
 router = APIRouter(tags=["steps"])
 
@@ -127,6 +130,7 @@ def create_step(usecase_id: str, body: StepCreate) -> dict:
         "created_at": _now(),
     }
     get_table().put_item(Item=step)
+    logger.info("step %s added to usecase %s (type=%s)", step["id"], usecase_id, body.step_type)
     return to_jsonable(step)
 
 
@@ -166,6 +170,7 @@ def reorder_steps(usecase_id: str, body: ReorderRequest) -> dict:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "One or more steps not found")
         raise
 
+    logger.info("reordered %d step(s) for usecase %s", len(body.step_orders), usecase_id)
     return {"message": "Steps reordered successfully", "count": len(body.step_orders)}
 
 
@@ -207,4 +212,5 @@ def delete_step(usecase_id: str, step_id: str) -> dict:
     get_table().delete_item(
         Key={"pk": f"USECASE#{usecase_id}", "sk": f"STEP#{step_id}"}
     )
+    logger.info("step %s deleted from usecase %s", step_id, usecase_id)
     return {"status": "step deleted", "stepId": step_id}

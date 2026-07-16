@@ -12,6 +12,7 @@ All routes require `api/admin`.
 from __future__ import annotations
 
 import datetime
+import logging
 
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
@@ -22,6 +23,8 @@ from ...aws import get_table
 from ...groups import bust_cache
 from ...scopes import ADMIN_SCOPE, SCOPE_CATALOG, VALID_SCOPES
 from ...security import require_scopes
+
+logger = logging.getLogger("cfins.admin.groups")
 
 router = APIRouter(tags=["groups"])
 
@@ -120,6 +123,7 @@ def create_group(body: GroupCreate) -> dict:
             raise HTTPException(status.HTTP_409_CONFLICT, "Group already exists")
         raise
     bust_cache()
+    logger.info("group %s created (scopes: %s)", name, ",".join(item["scopes"]) or "(none)")
     return _public(item)
 
 
@@ -152,6 +156,7 @@ def update_group(name: str, body: GroupUpdate) -> dict:
         ExpressionAttributeValues=values,
     )
     bust_cache()
+    logger.info("group %s updated (%s)", name, ", ".join(provided.keys()))
     return _public(_get_group_item(name))
 
 
@@ -170,4 +175,5 @@ def delete_group(name: str) -> dict:
         )
     get_table().delete_item(Key={"pk": "GROUPS", "sk": f"GROUP#{name}"})
     bust_cache()
+    logger.info("group %s deleted", name)
     return {"status": "group deleted", "name": name}

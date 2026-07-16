@@ -16,6 +16,7 @@ name prefix (not tag filters) — keeps the IAM policy small (no TagResource).
 from __future__ import annotations
 
 import datetime
+import logging
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -25,6 +26,8 @@ from ...aws import get_secrets_client, get_table
 from ...config import get_settings
 from ...security import require_scopes
 from ...serialization import to_jsonable
+
+logger = logging.getLogger("cfins.nova.config")
 
 router = APIRouter(tags=["usecase-config"])
 
@@ -174,6 +177,7 @@ def get_variables(usecase_id: str) -> dict:
 )
 def put_variables(usecase_id: str, body: VariablesBody) -> dict:
     variables = write_variables(usecase_id, [v.model_dump() for v in body.variables])
+    logger.info("usecase %s variables set (%d)", usecase_id, len(variables))
     return {"variables": variables}
 
 
@@ -194,6 +198,7 @@ def put_headers(usecase_id: str, body: HeadersBody) -> dict:
     # Values are stored verbatim (static); {{variables}} in them are resolved by
     # the worker at run time via the same template parser as step instructions.
     headers = write_headers(usecase_id, [h.model_dump() for h in body.headers])
+    logger.info("usecase %s headers set (%d)", usecase_id, len(headers))
     return {"headers": headers}
 
 
@@ -233,7 +238,7 @@ def list_secrets(usecase_id: str) -> dict:
 )
 def create_secrets(usecase_id: str, body: SecretsBody) -> dict:
     client = get_secrets_client()
-    count = 0
+    set_keys: list[str] = []
     for secret in body.secrets:
         if not secret.key or not secret.value:
             continue  # skip incomplete entries (sample parity)
@@ -248,8 +253,10 @@ def create_secrets(usecase_id: str, body: SecretsBody) -> dict:
                 client.update_secret(SecretId=name, SecretString=secret.value)
             else:
                 raise
-        count += 1
-    return {"message": "Secrets created/updated successfully", "count": count}
+        set_keys.append(secret.key)
+    # Log the KEY names only — never the secret values.
+    logger.info("usecase %s secrets set: [%s]", usecase_id, ",".join(set_keys) or "(none)")
+    return {"message": "Secrets created/updated successfully", "count": len(set_keys)}
 
 
 @router.patch(
@@ -265,6 +272,7 @@ def update_secret(usecase_id: str, body: SecretUpdate) -> dict:
     except ClientError as e:
         _raise_if_gone(e)
         raise
+    logger.info("usecase %s secret %r updated", usecase_id, body.secret_key)
     return {"message": "Secret updated successfully", "secret_key": body.secret_key}
 
 
@@ -283,6 +291,7 @@ def delete_secret(usecase_id: str, body: SecretDelete) -> dict:
     except ClientError as e:
         _raise_if_gone(e)
         raise
+    logger.info("usecase %s secret %r deleted", usecase_id, body.secret_key)
     return {"message": "Secret deleted successfully", "secret_key": body.secret_key}
 
 

@@ -23,6 +23,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from . import cognito, pat
 from .config import get_settings
 from .groups import resolve_scopes
+from .logging_config import set_log_user
 
 logger = logging.getLogger("cfins.auth")
 
@@ -117,30 +118,35 @@ def get_principal(
     # PATs are opaque (not JWTs) so they can't be routed by `iss`; catch them
     # first by their `qapat_` prefix, before the JWT decode path.
     if token.startswith(pat.PAT_PREFIX):
-        return _principal_from_pat(token)
-
-    claims, provider = _decode(token)
-
-    if provider == "cognito":
-        groups = list(claims.get("cognito:groups", []))
-        username = claims.get("username") or claims.get("sub", "")
-        info = cognito.fetch_userinfo(token, claims.get("sub", ""))
-        email = info.get("email", "")
-        display_name = info.get("name", "") or username
+        principal = _principal_from_pat(token)
     else:
-        groups = list(claims.get("groups", []))
-        username = claims.get("sub", "")
-        email = claims.get("email", "")
-        display_name = claims.get("name", "")
+        claims, provider = _decode(token)
 
-    return Principal(
-        username=username,
-        email=email,
-        display_name=display_name,
-        groups=groups,
-        scopes=resolve_scopes(groups),  # per-request, from the cached mapping
-        provider=provider,
-    )
+        if provider == "cognito":
+            groups = list(claims.get("cognito:groups", []))
+            username = claims.get("username") or claims.get("sub", "")
+            info = cognito.fetch_userinfo(token, claims.get("sub", ""))
+            email = info.get("email", "")
+            display_name = info.get("name", "") or username
+        else:
+            groups = list(claims.get("groups", []))
+            username = claims.get("sub", "")
+            email = claims.get("email", "")
+            display_name = claims.get("name", "")
+
+        principal = Principal(
+            username=username,
+            email=email,
+            display_name=display_name,
+            groups=groups,
+            scopes=resolve_scopes(groups),  # per-request, from the cached mapping
+            provider=provider,
+        )
+
+    # Bind the identity for logging (keyed by correlation id, so every log line
+    # for this request — router lines and the summary — carries the user).
+    set_log_user(principal.username)
+    return principal
 
 
 def _principal_from_pat(token: str) -> Principal:
