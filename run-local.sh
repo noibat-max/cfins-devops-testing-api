@@ -19,9 +19,20 @@ fi
 export AWS_PROFILE="${AWS_PROFILE:-cfins-local}"
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 
-# Prefer the shared venv one level up (created for the scripts/), else system python.
-PY="../.venv/bin/python"
-[[ -x "$PY" ]] || PY="python3"
+# Locate a venv Python across layouts: in-repo (.venv) or shared one level up
+# (../.venv), Unix (bin/python) or Windows/Git-Bash (Scripts/python.exe).
+PY=""
+for cand in \
+  .venv/bin/python .venv/Scripts/python.exe \
+  ../.venv/bin/python ../.venv/Scripts/python.exe; do
+  if [[ -x "$cand" ]]; then PY="$cand"; break; fi
+done
+# Fall back to whatever Python is on PATH (Windows uses `python`, not `python3`).
+[[ -n "$PY" ]] || PY="$(command -v python3 || command -v python || true)"
+if [[ -z "$PY" ]]; then
+  echo "error: no venv or system Python found. Create one: python -m venv .venv && pip install -r requirements.txt" >&2
+  exit 1
+fi
 
-echo "Starting QA Workbench API — profile=$AWS_PROFILE region=$AWS_REGION"
+echo "Starting QA Workbench API — python=$PY profile=$AWS_PROFILE region=$AWS_REGION"
 exec "$PY" -m uvicorn app.main:app --reload --port 8000
