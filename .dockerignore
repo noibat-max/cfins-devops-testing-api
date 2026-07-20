@@ -1,5 +1,9 @@
 # Not part of the deployed image — provisioning/seed tooling, local env, caches
 scripts/
+docs/
+Dockerfile
+.dockerignore
+run-local.sh
 .env
 .env.*
 !.env.example
