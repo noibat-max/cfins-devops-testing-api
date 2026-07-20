@@ -25,7 +25,7 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ...aws import get_s3_client, get_table
+from ...aws import get_ecs_client, get_s3_client, get_table
 from ...config import get_settings
 from ...security import Principal, require_scopes
 from ...serialization import to_jsonable
@@ -45,8 +45,11 @@ PRESIGN_TTL = 900  # 15 min — artifacts are consumed right after minting
 EXEC_FIELDS = (
     "executionId", "usecaseId", "status", "mode", "trigger",
     "createdBy", "createdAt", "startedAt", "endedAt", "errorMessage",
-    "stopRequested",
+    "stopRequested", "taskArn", "capture",
 )
+
+VALID_MODES = {"local", "run_now"}
+VALID_CAPTURE = {"screenshots", "full"}
 STEP_FIELDS = (
     "stepId", "sort", "status", "startedAt", "endedAt",
     "errorMessage", "result", "updatedAt",
@@ -107,6 +110,57 @@ def _presign(client_method: str, key: str) -> str:
 class ExecuteRequest(BaseModel):
     mode: str = "local"
     trigger: str | None = None
+    # run_now only: "screenshots" (default) or "full" (adds HTML trace + video).
+    # Falls back to the server's RUNNER_CAPTURE default when omitted.
+    capture: str | None = None
+
+
+def _launch_ecs_task(usecase_id: str, eid: str, capture: str) -> str:
+    """Fire a one-shot Fargate task for a run_now execution (ecs.run_task).
+
+    The task adopts the pre-created execution id and the capture level (passed as
+    container env overrides) and runs it headless via the task role. Returns the
+    task ARN.
+    """
+    s = get_settings()
+    try:
+        resp = get_ecs_client().run_task(
+            cluster=s.ecs_cluster,
+            taskDefinition=s.runner_task_definition,
+            launchType=s.runner_launch_type,
+            count=1,
+            networkConfiguration={
+                "awsvpcConfiguration": {
+                    "subnets": s.runner_subnets,
+                    "securityGroups": s.runner_security_groups,
+                    "assignPublicIp": s.runner_assign_public_ip,
+                }
+            },
+            overrides={
+                "containerOverrides": [
+                    {
+                        "name": "runner",
+                        "environment": [
+                            {"name": "USECASE_ID", "value": usecase_id},
+                            {"name": "EXECUTION_ID", "value": eid},
+                            {"name": "CAPTURE", "value": capture},
+                        ],
+                    }
+                ]
+            },
+        )
+    except ClientError as e:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Failed to launch ECS task: {e.response['Error'].get('Message', str(e))}",
+        )
+    tasks = resp.get("tasks", [])
+    if not tasks:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"ECS did not start a task: {resp.get('failures')}",
+        )
+    return tasks[0]["taskArn"]
 
 
 @router.post("/usecase/{usecase_id}/execute", status_code=status.HTTP_201_CREATED)
@@ -115,34 +169,71 @@ def execute(
     body: ExecuteRequest,
     principal: Principal = Depends(require_scopes("api/nova/usecases.execute")),
 ) -> dict:
-    """Create an execution record. mode `local` = record-only (CLI runs it).
+    """Create an execution record.
+      * mode `local`   — record-only; the tester's CLI runs it and reports back.
+      * mode `run_now` — record + launch a Fargate task (ecs.run_task) that runs
+        it headless via the task role.
 
-    `run_now`/`queued`/`scheduled` (remote ECS) are deferred — 400 for now.
+    `queued`/`scheduled` (SQS / EventBridge) remain deferred.
     """
     _get_usecase_or_404(usecase_id)
-    if body.mode != "local":
+    if body.mode not in VALID_MODES:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"mode '{body.mode}' is not yet supported (only 'local')",
+            f"mode '{body.mode}' is not supported (use 'local' or 'run_now')",
         )
+    # Fail fast if run_now can't actually launch — before creating a dangling record.
+    capture = ""
+    if body.mode == "run_now":
+        if not get_settings().ecs_enabled:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "run_now is not configured on this server (no ECS cluster/task definition)",
+            )
+        capture = (body.capture or get_settings().runner_capture).lower()
+        if capture not in VALID_CAPTURE:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"capture must be one of {sorted(VALID_CAPTURE)}",
+            )
 
     eid = str(uuid.uuid4())
+    default_trigger = "ui" if body.mode == "run_now" else "cli"
     item = {
         "pk": f"USECASE_EXECUTION#{usecase_id}",
         "sk": f"EXECUTION#{eid}",
         "executionId": eid,
         "usecaseId": usecase_id,
         "status": "pending",
-        "mode": "local",
-        "trigger": body.trigger or "cli",
+        "mode": body.mode,
+        "trigger": body.trigger or default_trigger,
         "createdBy": principal.username,
         "createdAt": _now(),
         "stopRequested": False,
     }
+    if capture:
+        item["capture"] = capture
     get_table().put_item(Item=item)
-    logger.info("execution %s created for usecase %s (mode=local, trigger=%s)",
-                eid, usecase_id, item["trigger"])
-    return {"executionId": eid, "status": "pending", "mode": "local"}
+
+    resp: dict = {"executionId": eid, "status": "pending", "mode": body.mode}
+    if body.mode == "run_now":
+        try:
+            task_arn = _launch_ecs_task(usecase_id, eid, capture)
+        except HTTPException:
+            # Don't leave a dangling pending record if the launch failed.
+            _update(f"USECASE_EXECUTION#{usecase_id}", f"EXECUTION#{eid}",
+                    ["#s = :s", "errorMessage = :em", "endedAt = :e"],
+                    {"#s": "status"},
+                    {":s": "failed", ":em": "Failed to launch ECS task", ":e": _now()})
+            raise
+        _update(f"USECASE_EXECUTION#{usecase_id}", f"EXECUTION#{eid}",
+                ["taskArn = :ta"], {}, {":ta": task_arn})
+        resp["taskArn"] = task_arn
+        logger.info("execution %s launched on ECS (task=%s)", eid, task_arn)
+    else:
+        logger.info("execution %s created for usecase %s (mode=local, trigger=%s)",
+                    eid, usecase_id, item["trigger"])
+    return resp
 
 
 @router.get("/usecase/{usecase_id}/executions")

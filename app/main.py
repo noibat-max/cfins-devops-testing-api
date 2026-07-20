@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .audit import AuditMiddleware
 from .config import get_settings
 from .logging_config import RequestLogMiddleware, configure_logging
-from .routers.nova import config, executions, steps, usecases
+from .routers.nova import config, executions, steps, suites, templates, usecases
 from .routers.shell import apps, audit, auth, groups, tokens, users
 
 settings = get_settings()
@@ -101,6 +101,8 @@ app.include_router(usecases.router, prefix=NOVA)
 app.include_router(steps.router, prefix=NOVA)
 app.include_router(config.router, prefix=NOVA)
 app.include_router(executions.router, prefix=NOVA)
+app.include_router(templates.router, prefix=NOVA)
+app.include_router(suites.router, prefix=NOVA)
 
 
 @app.on_event("startup")

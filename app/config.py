@@ -45,6 +45,26 @@ class Settings:
     # default SigV2 presign signs Content-Type, which breaks client PUTs.
     artifacts_bucket: str = os.environ.get("ARTIFACTS_BUCKET", "cfins-qaworkbench-local")
 
+    # --- ECS (remote execution: mode `run_now` → ecs.run_task) ---
+    # Deploy-time config, one set per environment (these are config, not secrets).
+    # Empty when remote runs aren't wired → `run_now` returns a clear 400. Prefer
+    # a bare family name for DEV (latest revision) and a pinned family:revision
+    # for SAT/prod (so a new task-def registration can't silently change prod).
+    ecs_cluster: str = os.environ.get("ECS_CLUSTER", "")
+    runner_task_definition: str = os.environ.get("RUNNER_TASK_DEFINITION", "")
+    runner_subnets: list[str] = _split_csv(os.environ.get("RUNNER_SUBNETS", ""))
+    runner_security_groups: list[str] = _split_csv(os.environ.get("RUNNER_SECURITY_GROUPS", ""))
+    runner_launch_type: str = os.environ.get("RUNNER_LAUNCH_TYPE", "FARGATE")
+    runner_assign_public_ip: str = os.environ.get("RUNNER_ASSIGN_PUBLIC_IP", "ENABLED")
+    # Default artifact capture for remote (run_now) runs: "screenshots" (per-step
+    # PNGs) or "full" (adds HTML trace + video to S3). A per-run `capture` in the
+    # execute request overrides this.
+    runner_capture: str = os.environ.get("RUNNER_CAPTURE", "screenshots")
+
+    @property
+    def ecs_enabled(self) -> bool:
+        return bool(self.ecs_cluster and self.runner_task_definition and self.runner_subnets)
+
     # --- Auth / JWT ---
     # No default for the secret on purpose — a missing secret should be an
     # obvious failure, not a silently-insecure fixed key. Validated in main.

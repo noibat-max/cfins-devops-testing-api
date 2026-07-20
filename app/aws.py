@@ -58,3 +58,9 @@ def get_s3_client():
     end-to-end against the real bucket — see CLAUDE.md §5 / scripts/provision_s3.py.
     """
     return _session().client("s3", config=Config(signature_version="s3v4"))
+
+
+@functools.lru_cache
+def get_ecs_client():
+    """ECS client for launching remote (run_now) worker tasks via ecs.run_task."""
+    return _session().client("ecs")
