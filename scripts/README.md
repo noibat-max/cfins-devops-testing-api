@@ -21,11 +21,11 @@ Env overrides: `WORKBENCH_TABLE` (default `cfins-qaworkbench`), `AWS_REGION`
 (default `us-east-1`), `ENABLE_PITR=true` (prod only).
 
 ## gen_jwt_secret.py
-Prints a random URL-safe HS256 signing secret (48 bytes) as a `JWT_SECRET=...`
+Prints a random URL-safe HS256 signing secret (48 bytes) as a `JWT_SIGN_HASH=...`
 line. No AWS access needed. Copy the output into `.env` yourself.
 
 ```bash
-python scripts/gen_jwt_secret.py            # print a JWT_SECRET=... line
+python scripts/gen_jwt_secret.py            # print a JWT_SIGN_HASH=... line
 ```
 
-Env override: `JWT_SECRET_BYTES` (default `48`).
+Env override: `JWT_SIGN_HASH_BYTES` (default `48`).

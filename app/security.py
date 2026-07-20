@@ -76,7 +76,7 @@ def _decode(token: str) -> tuple[dict, str]:
         try:
             return jwt.decode(
                 token,
-                settings.jwt_secret,
+                settings.jwt_sign_hash,
                 algorithms=["HS256"],
                 issuer=settings.jwt_issuer,
             ), "local"

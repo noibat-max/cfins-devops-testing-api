@@ -108,9 +108,9 @@ app.include_router(suites.router, prefix=NOVA)
 @app.on_event("startup")
 def _validate_config() -> None:
     """Fail loudly on obvious misconfiguration rather than at first request."""
-    if not settings.jwt_secret:
+    if not settings.jwt_sign_hash:
         logger.warning(
-            "JWT_SECRET is not set — token minting will fail. "
+            "JWT_SIGN_HASH is not set — token minting will fail. "
             "Set it in .env (see .env.example) before using auth endpoints."
         )
     logger.info(

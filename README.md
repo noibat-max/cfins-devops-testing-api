@@ -24,7 +24,7 @@ Requires the shared venv one level up (`../.venv`) with deps installed:
 
 ```bash
 ../.venv/bin/pip install -r requirements.txt
-cp .env.example .env            # then set JWT_SECRET
+cp .env.example .env            # then set JWT_SIGN_HASH
 ./run-local.sh                  # -> http://localhost:8000
 ```
 
@@ -56,7 +56,7 @@ Smoke-test locally (mount the profile to stand in for the task role):
 
 ```bash
 docker run --rm -p 8001:8000 \
-  -e JWT_SECRET=smoke -e AWS_PROFILE=cfins-local -e AWS_REGION=us-east-1 \
+  -e JWT_SIGN_HASH=smoke -e AWS_PROFILE=cfins-local -e AWS_REGION=us-east-1 \
   -v ~/.aws:/home/app/.aws:ro cfins-qaworkbench-api:dev
 curl -s localhost:8001/health   # {"status":"ok"}
 ```

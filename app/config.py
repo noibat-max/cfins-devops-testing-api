@@ -68,7 +68,7 @@ class Settings:
     # --- Auth / JWT ---
     # No default for the secret on purpose — a missing secret should be an
     # obvious failure, not a silently-insecure fixed key. Validated in main.
-    jwt_secret: str = os.environ.get("JWT_SECRET", "")
+    jwt_sign_hash: str = os.environ.get("JWT_SIGN_HASH", "")
     jwt_issuer: str = os.environ.get("JWT_ISSUER", "cfins-qaworkbench")
     jwt_ttl_hours: int = int(os.environ.get("JWT_TTL_HOURS", "8"))
 

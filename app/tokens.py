@@ -19,9 +19,9 @@ from .config import get_settings
 
 def mint_token(*, username: str, email: str, display_name: str, groups: list[str]) -> str:
     settings = get_settings()
-    if not settings.jwt_secret:
+    if not settings.jwt_sign_hash:
         # Guard: never sign with an empty key.
-        raise RuntimeError("JWT_SECRET is not configured")
+        raise RuntimeError("JWT_SIGN_HASH is not configured")
 
     now = datetime.datetime.now(datetime.timezone.utc)
     payload = {
@@ -33,4 +33,4 @@ def mint_token(*, username: str, email: str, display_name: str, groups: list[str
         "iat": now,
         "exp": now + datetime.timedelta(hours=settings.jwt_ttl_hours),
     }
-    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+    return jwt.encode(payload, settings.jwt_sign_hash, algorithm="HS256")
