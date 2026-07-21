@@ -47,6 +47,17 @@ def get_secrets_client():
     return _session().client("secretsmanager")
 
 
+def get_secret_string(secret_id: str) -> str:
+    """Fetch a secret's SecretString from Secrets Manager.
+
+    Used at startup to resolve JWT_SIGN_HASH when it's given as a secret
+    reference rather than inline (see main._resolve_jwt_sign_hash). Not cached —
+    it's read once at boot and the resolved key is stored on Settings.
+    """
+    resp = get_secrets_client().get_secret_value(SecretId=secret_id)
+    return resp.get("SecretString", "") or ""
+
+
 @functools.lru_cache
 def get_s3_client():
     """S3 client for execution artifacts, configured for **SigV4** presigning.

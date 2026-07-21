@@ -9,13 +9,19 @@ Lambda replaced by a custom REST API). Datastore stays **DynamoDB**
 
 ```
 app/
-  main.py       FastAPI app: CORS, config validation, GET /health
-  config.py     env-driven settings (table, region, JWT, CORS)
+  main.py       FastAPI app: CORS, audit + logging middleware, config validation, GET /health
+  config.py     env-driven settings (table, region, S3, ECS, JWT, CORS, Cognito)
   aws.py        boto3 helpers (default credential chain — no hardcoded profile)
-  routers/      API routers (empty until auth phase)
+  security.py   issuer-routed auth (local JWT / Cognito / PAT) + require_scopes
+  audit.py      records every mutating request (payload redacted) to DynamoDB
+  routers/
+    shell/      app-agnostic platform: auth, apps, users, groups, tokens, audit  (mounted /api)
+    nova/       Nova Act QA Studio: usecases, steps, config, executions, templates, suites  (mounted /api/nova)
 scripts/        provisioning + seed tooling (local-only, excluded from image)
+docs/           api-surface.md, remote-execution-ecs.md, api-task-role-policy.json
 run-local.sh    load .env → uvicorn --reload on :8000
 .env.example    documents every env var (copy to .env)
+DEPLOYMENT.md   DevOps hand-over: image + ECS runtime contract
 ```
 
 ## Run locally
@@ -91,7 +97,19 @@ Notes:
   (for the `run_now` remote-execution trigger).
 - CI/CD build+push, multi-env task defs, and pinned digests are **DevOps** (out of scope).
 
+## Deploying to ECS
+
+DevOps hand-over — the image + runtime contract (env vars, secrets, IAM, health,
+the GitLab→ECR→ECS pipeline) is in **[`DEPLOYMENT.md`](DEPLOYMENT.md)**. The
+`run_now` remote-execution trigger is in **`docs/remote-execution-ecs.md`**; the
+task-role policy is **`docs/api-task-role-policy.json`**.
+
 ## Status
 
-Phase 1 (scaffold) done: app boots, `/health` responds, config loads. Auth
-endpoints (`/auth/login`, `/auth/me`) and the scope middleware come next.
+Built + verified against real AWS: local + Cognito auth, PATs, scoped authZ,
+Use Cases + Steps, Templates (+ sync), Test Suites (authoring + execution),
+the §5 execution engine, remote **Run Now** → ECS Fargate (use case + suite),
+audit trail, and Users/Groups admin. The full API surface is in
+`docs/api-surface.md`. Remaining work is DevOps productionization (CI/CD,
+multi-env task defs, pinned digests) and the deferred `queued`/`scheduled`
+execution modes.

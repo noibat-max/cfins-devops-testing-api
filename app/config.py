@@ -66,9 +66,17 @@ class Settings:
         return bool(self.ecs_cluster and self.runner_task_definition and self.runner_subnets)
 
     # --- Auth / JWT ---
-    # No default for the secret on purpose — a missing secret should be an
-    # obvious failure, not a silently-insecure fixed key. Validated in main.
+    # HS256 signing key, supplied one of two ways (the direct value wins):
+    #   * JWT_SIGN_HASH        — the key itself (local dev via .env).
+    #   * JWT_SIGN_HASH_SECRET — a Secrets Manager secret id/ARN; the API fetches
+    #                            its value at startup via the task role (prod/ECS).
+    # If the SecretString is JSON, set JWT_SIGN_HASH_SECRET_KEY to pick a field;
+    # otherwise the whole SecretString is the key. No default on the key itself —
+    # a missing key is an obvious failure, not a silently-insecure fixed value.
+    # Resolution happens in main._resolve_jwt_sign_hash (fetch + fail-fast).
     jwt_sign_hash: str = os.environ.get("JWT_SIGN_HASH", "")
+    jwt_sign_hash_secret: str = os.environ.get("JWT_SIGN_HASH_SECRET", "")
+    jwt_sign_hash_secret_key: str = os.environ.get("JWT_SIGN_HASH_SECRET_KEY", "")
     jwt_issuer: str = os.environ.get("JWT_ISSUER", "cfins-qaworkbench")
     jwt_ttl_hours: int = int(os.environ.get("JWT_TTL_HOURS", "8"))
 

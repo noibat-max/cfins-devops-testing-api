@@ -1,95 +1,83 @@
-# Remote Execution (Run Now → ECS Fargate) — Ops & Hand-off
+# The API on ECS + the Run Now trigger (Ops & Hand-off)
 
-This documents the **remote execution** path — a user clicks **Run Now** in the UI
-(or a suite's Run Now), the API launches a one-shot **Fargate task** that runs the
-test headless and writes results straight to DynamoDB/S3 via its task role. It is
-the reference for DevOps to **productionize** (CI/CD, multi-env, IaC). Everything
-below was **built and verified end-to-end in the dev account** (`103930328611`,
-`us-east-1`) using the scoped `cfins-local` IAM user.
+This is the **API side** of remote execution: how the **`cfins-devops-testing-api`**
+service is deployed to ECS, and how its **`run_now`** mode launches a runner task via
+`ecs.run_task`. The **runner** (the worker image the task runs, its ECS task
+definition/roles, and how they're built/provisioned) is documented in the CLI repo:
+**`cfins-devops-testing-cli/docs/runner-ecs.md`** — this doc does not repeat it.
 
-There are two run paths; this doc is **only** the remote one:
-- **Local** (`mode=local`) — the tester's CLI (`qa nova run` / `run-suite`) runs the browser.
-- **Remote** (`mode=run_now`) — the API calls `ecs.run_task`; **this document.**
+Verified in the dev account (`103930328611`, `us-east-1`) via the scoped `cfins-local` user.
 
 ---
 
-## 1. Flow
+## 1. Flow (API's part)
 
 ```
-UI "Run Now"  ─POST /api/nova/usecase/{id}/execute {mode:"run_now", capture}─►  API
-   (or suite)                                                                    │
-                                    creates the execution record(s)              │
-                                    ecs.run_task(cluster, taskDef, overrides:     │
-                                      USECASE_ID, EXECUTION_ID, CAPTURE)  ────────┼──► Fargate task
-                                                                                 │      (worker image)
-   UI polls execution/roll-up  ◄────────────────────────────────────────────────┘      pulls image (ECR)
-                                                                                        runs headless (Nova Act)
-   task role → DynamoDB (status/steps) + S3 (artifacts) + Secrets Manager (secrets)
+UI "Run Now"  ─POST /api/nova/usecase/{id}/execute {mode:"run_now", capture}─►  API (ECS Service)
+   (or suite)                                                                     │
+                                    creates the execution record(s)               │
+                                    ecs.run_task(cluster, taskDef, overrides:      │
+                                      USECASE_ID, EXECUTION_ID, CAPTURE)  ─────────┼──► runner task
+   UI polls execution/roll-up  ◄─────────────────────────────────────────────────┘     (see CLI repo doc)
 ```
 
-A **suite** run_now creates one execution per member and launches **one Fargate task
-per member** (they run in parallel); the suite status is a read-live roll-up over
-those member executions (via the `suite-execution-index` GSI).
+The API **creates the execution record and calls `ecs.run_task`** — that's its whole role
+in a remote run. It does not run the browser or write artifacts; the runner task does
+(directly, via its own task role). A **suite** `run_now` launches **one task per member**
+(parallel). Code: `app/routers/nova/executions.py::_launch_ecs_task` (+ `execute`) and
+`app/routers/nova/suites.py::execute_test_suite`.
 
 ---
 
-## 2. Components & where they live
+## 2. Deploying the API to ECS
 
-| Component | Where | Notes |
-|---|---|---|
-| Runner **image** | `cfins-devops-testing-cli/Dockerfile` | Engine + `python -m qa_cli.worker` (CMD) + headless Chromium + boto3. Build once, **region/env-agnostic**, **no creds/keys baked in.** |
-| **ECR** repo | `cfins-qaworkbench-runner` | Immutable tags, scan-on-push. |
-| **ECS** infra | `cfins-devops-testing-api/scripts/provision_ecs.py` | Idempotent: task-exec role, task role, log group, cluster, task def. |
-| API **trigger** | `app/routers/nova/executions.py::_launch_ecs_task` + `execute` (mode `run_now`); suites `app/routers/nova/suites.py::execute_test_suite` | Reads ECS config from env; calls `ecs.run_task`. |
-| API **config** | `app/config.py` (ECS_* / RUNNER_* + `ecs_enabled`) | Per-environment env vars (see §5). |
+The API is a **long-lived ECS Service** behind an **ALB** (health check on `/health`),
+unlike the runner's one-shot tasks. Image = the API's own container (`Dockerfile` in this
+repo → e.g. ECR repo `cfins-qaworkbench-api`; build/push in the repo README). Non-root,
+uvicorn on `:8000`, config from the task-def environment (nothing baked in).
 
 ---
 
-## 3. The image (build once, promote the digest)
+## 3. IAM — the API's task role
 
-Built from `cfins-devops-testing-cli/Dockerfile`. Must be **`linux/amd64`** (Fargate x86).
+On ECS the API's boto3 code assumes **its own task role** (resolved via the
+container-credentials endpoint; no profile/keys). It needs the app's runtime perms **plus**
+the `run_now` trigger perms:
+
+- `cfins-qaworkbench` DynamoDB (+ `index/*` for the `suite-execution-index` GSI)
+- `cfins-qaworkbench-*` S3 (the presigned URLs it mints are signed with these creds)
+- `cfins-qaworkbench*` Secrets Manager (per-use-case secrets) + `ListSecrets`
+- **`ecs:RunTask`** on `cfins-qaworkbench-runner:*` **+** **`iam:PassRole`** on
+  `cfins-qaworkbench-runner-*` (condition `PassedToService=ecs-tasks.amazonaws.com`) — this
+  is what lets the API launch and hand the runner roles to a runner task.
+
+Full policy: **`docs/api-task-role-policy.json`**. Create the role (standard ecs-tasks trust)
+and attach it:
 
 ```bash
-cd cfins-devops-testing-cli
-docker build -t cfins-qaworkbench-runner:dev .           # x86 host builds amd64 natively
-# Apple Silicon: docker buildx build --platform linux/amd64 -t cfins-qaworkbench-runner:dev --load .
-
-REG=103930328611.dkr.ecr.us-east-1.amazonaws.com
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $REG
-docker tag  cfins-qaworkbench-runner:dev $REG/cfins-qaworkbench-runner:<version>
-docker push $REG/cfins-qaworkbench-runner:<version>
+TRUST='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ecs-tasks.amazonaws.com"},"Action":"sts:AssumeRole"}]}'
+aws iam create-role --role-name cfins-qaworkbench-api-task \
+  --assume-role-policy-document "$TRUST" --region us-east-1 --profile cfins-local
+aws iam put-role-policy --role-name cfins-qaworkbench-api-task \
+  --policy-name workbench-api-access \
+  --policy-document file://docs/api-task-role-policy.json --region us-east-1 --profile cfins-local
 ```
 
-- **Immutable tags** are on → each push needs a **new** tag (semver or git SHA).
-- The task def **pins the digest** (`repo@sha256:…`), resolved by `provision_ecs.py`.
-- **Note:** the dev image `0.1.0` in ECR predates the Dockerfile's
-  `NOVA_ACT_SKIP_PLAYWRIGHT_INSTALL=1` ENV. That flag is currently also injected via
-  the task-def env by `provision_ecs.py`, so `0.1.0` works. **Production images built
-  from the current Dockerfile bake the flag in** — the task-def injection is then
-  belt-and-suspenders. (Nova Act would otherwise try `playwright install` at runtime
-  and fail as the non-root user; the browser is already baked into the image.)
+The API's task also needs a **task-execution role** (ECR pull + logs — the managed
+`AmazonECSTaskExecutionRolePolicy`).
+
+> In **dev** the API runs **locally** as `cfins-local` (boto3 default chain), which already
+> has these perms — so the task role isn't exercised until the API is deployed to ECS.
+> `cfins-local` also holds provision-time ECR/ECS/IAM-create perms
+> (`cfins-local-ecs-provisioning`); in prod, DevOps should split "provision" (CI/CD) from
+> "run" (this task role) into separate identities.
 
 ---
 
-## 4. IAM (three distinct identities)
+## 4. API config (per environment — the "which cluster/task" answer)
 
-1. **Task-execution role** `cfins-qaworkbench-runner-exec` — ECS uses it to **pull the
-   image + write logs**. Managed policy `AmazonECSTaskExecutionRolePolicy`, plus (when a
-   Nova Act key secret is wired) `secretsmanager:GetSecretValue` on **just that secret**.
-2. **Task role** `cfins-qaworkbench-runner-task` — what the **worker** uses at runtime.
-   Inline `workbench-access`: scoped `cfins-qaworkbench*` DynamoDB (+ GSI), S3, Secrets.
-   No creds are baked in — boto3's default chain resolves this role in the container.
-3. **The API's own identity** — needs `ecs:RunTask` + `iam:PassRole` (on the two runner
-   roles, conditioned to `ecs-tasks.amazonaws.com`). In dev the API runs as `cfins-local`,
-   which was granted these via the inline policy **`cfins-local-ecs-provisioning`** (that
-   policy also grants the ECR/ECS/IAM-create perms used to *provision* — DevOps should
-   split "provision" vs "run" perms in prod; the API only needs RunTask + PassRole).
-
----
-
-## 5. API config (per environment — the "which cluster/task" answer)
-
-The UI/CLI hold **none** of this — the API resolves everything from its own env:
+The UI/CLI hold **none** of this — the API resolves everything from its own env
+(`app/config.py`). These are **API deploy-time config** that point at the runner infra:
 
 | Env var | Example | Required |
 |---|---|---|
@@ -101,63 +89,45 @@ The UI/CLI hold **none** of this — the API resolves everything from its own en
 | `RUNNER_ASSIGN_PUBLIC_IP` | `ENABLED` | default ENABLED |
 | `RUNNER_CAPTURE` | `screenshots` \| `full` | default screenshots (per-run `capture` overrides) |
 
-`ecs_enabled` = cluster + task-def + subnets all set; when false, `run_now` returns a
-clear **400** (local runs still work).
+`ecs_enabled` = cluster + task-def + subnets all set; when false, `run_now` returns a clear
+**400** (local runs still work). The **values** for the cluster/task-def/subnets come from
+the runner infra — see the CLI repo doc.
 
 ---
 
-## 6. Per-environment & promotion/rollback
+## 5. Per-environment & promotion/rollback
 
-A **task-definition revision bundles {image digest + env vars + roles}** — it's the
-promotion **and** rollback unit.
+The runner **task-definition revision bundles {image digest + env + roles}** — it's the
+promotion/rollback unit. The API selects it via `RUNNER_TASK_DEFINITION`:
 
-- **DEV:** `RUNNER_TASK_DEFINITION` = bare family → uses the latest revision (fast iteration).
-- **SAT/prod:** **pin a revision** (`…:3`) so a new registration can't silently change
-  what runs. Promote = point config at a vetted revision; roll back = point back.
-- **Recommended for prod:** store the "active" task-def ARN in an **SSM Parameter** and
-  have the API read it → move the pointer to roll back **without a redeploy**. (ECS task
-  defs have no movable `:LATEST` alias; the family name = latest-active only.)
-
----
-
-## 7. Nova Act key
-
-Stored as a Secrets Manager secret (dev: `cfins-qaworkbench/nova-act-key`). Wire it by
-running `provision_ecs.py` with `NOVA_ACT_SECRET_ARN=<arn>` — it adds the secret to the
-task def's `secrets` (injected as `NOVA_ACT_API_KEY`) and grants the **exec role** read on
-just that secret. The key is **never** in the image or in DynamoDB.
+- **DEV:** bare family → latest revision (fast iteration).
+- **SAT/prod:** **pin a revision** (`…:3`) so a new registration can't silently change what
+  runs. Promote = point config at a vetted revision; roll back = point back.
+- **Recommended for prod:** store the active task-def ARN in an **SSM Parameter** and have
+  the API read it → move the pointer to roll back **without a redeploy**. (ECS task defs have
+  no movable `:LATEST` alias.)
 
 ---
 
-## 8. Networking
+## 6. What DevOps productionizes (API side)
 
-Dev uses the **default VPC** public subnets + default SG + `assignPublicIp=ENABLED` (the
-task needs egress to pull from ECR and reach Nova Act + the target site).
-**Prod recommendation:** private subnets + **NAT** (or VPC endpoints for ECR/S3/DynamoDB/
-Secrets/Logs) instead of public IPs; a dedicated egress-only SG.
+- **CI/CD** for the **API image** (build `linux/amd64`, immutable tag, scan) and the ECS
+  **Service** (ALB, target group `/health`, desired count, autoscaling) via IaC.
+- Per-env API task defs with the **API task role** (§3) + exec role, and the ECS/RUNNER_*
+  config (§4) as env.
+- The **SSM movable pointer** for `RUNNER_TASK_DEFINITION`.
+- Split provision-vs-run IAM.
 
----
-
-## 9. What DevOps productionizes (out of scope for this effort)
-
-- **CI/CD**: build the `linux/amd64` image, push with an immutable tag, scan; IaC (CDK/
-  Terraform) for ECR/roles/cluster/task-defs instead of the dev `provision_ecs.py`.
-- **Multi-env**: per-env task defs (pinned digests), roles, clusters; the SSM pointer.
-- **Secrets**: per-env Nova Act key secret.
-- **Guardrails**: task `stopTimeout` / an execution watchdog so a hung run can't bill
-  forever; CloudWatch alarms; log retention; least-privilege split of provision-vs-run IAM.
-- **Deferred features**: `queued` (SQS) + `scheduled` (EventBridge) modes; **Bedrock
-  AgentCore Browser** (managed browser — today it's headless Chromium in-container); DCV
-  live view.
+(Runner-side productionization — the runner image CI/CD, its roles/cluster/task-defs — is in
+the CLI repo doc.)
 
 ---
 
-## 10. Verified in dev (what "done" means here)
+## 7. Verified in dev
 
-- **Single use case** `run_now` → Fargate task green: steps passed, screenshots in S3,
-  shown in Execution History (`trigger=ui`, `mode=run_now`).
-- **Full capture** `run_now` green: screenshots + Nova Act HTML/JSON traces + a video
-  (webm), all in S3.
-- **Suite** `run_now` green: 2 members → **2 parallel Fargate tasks**, roll-up
-  pending→running→completed (2/2).
-- Task role did all DynamoDB/S3/Secrets work; **no credentials in the image**.
+- **API-triggered `run_now`**: `POST …/execute {mode:"run_now"}` → the API called
+  `ecs.run_task` → Fargate task → execution polled **pending→executing→completed**
+  (`trigger=ui`, `mode=run_now`), steps passed, screenshots in S3; viewer blocked by the
+  execute scope.
+- **Suite `run_now`**: 2 members → **2 parallel tasks** launched by the API, roll-up green.
+- Full-capture + the runner internals are covered in the CLI repo doc.

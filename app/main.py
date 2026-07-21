@@ -105,13 +105,59 @@ app.include_router(templates.router, prefix=NOVA)
 app.include_router(suites.router, prefix=NOVA)
 
 
+def _resolve_jwt_sign_hash() -> None:
+    """Resolve the HS256 signing key at startup.
+
+    Precedence: a directly-provided JWT_SIGN_HASH (local dev / override) wins and
+    skips AWS entirely. Otherwise, if JWT_SIGN_HASH_SECRET names a Secrets Manager
+    secret, fetch it via the task role and cache it on settings. When the
+    SecretString is JSON and JWT_SIGN_HASH_SECRET_KEY is set, that field is used;
+    otherwise the whole SecretString is the key. A configured-but-unreadable
+    secret fails startup fast — a broken key config should surface at boot, not
+    at first login.
+    """
+    if settings.jwt_sign_hash:
+        return
+    secret_id = settings.jwt_sign_hash_secret
+    if not secret_id:
+        return
+
+    from .aws import get_secret_string  # local import: no boto3 at module import
+
+    try:
+        raw = get_secret_string(secret_id)
+    except Exception:
+        logger.exception(
+            "Failed to fetch JWT_SIGN_HASH from Secrets Manager (id=%s)", secret_id
+        )
+        raise
+
+    value = raw
+    if settings.jwt_sign_hash_secret_key:
+        import json
+
+        try:
+            value = json.loads(raw)[settings.jwt_sign_hash_secret_key]
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            logger.error(
+                "JWT secret %s: cannot extract key %r from SecretString JSON (%s)",
+                secret_id, settings.jwt_sign_hash_secret_key, type(e).__name__,
+            )
+            raise
+
+    settings.jwt_sign_hash = str(value).strip()
+    # Log the reference, never the value.
+    logger.info("JWT_SIGN_HASH resolved from Secrets Manager (id=%s)", secret_id)
+
+
 @app.on_event("startup")
 def _validate_config() -> None:
     """Fail loudly on obvious misconfiguration rather than at first request."""
+    _resolve_jwt_sign_hash()
     if not settings.jwt_sign_hash:
         logger.warning(
-            "JWT_SIGN_HASH is not set — token minting will fail. "
-            "Set it in .env (see .env.example) before using auth endpoints."
+            "JWT_SIGN_HASH is not set — token minting will fail. Set JWT_SIGN_HASH "
+            "(local) or JWT_SIGN_HASH_SECRET (Secrets Manager) — see .env.example."
         )
     logger.info(
         "QA Workbench API starting — region=%s table=%s cors=%s",
