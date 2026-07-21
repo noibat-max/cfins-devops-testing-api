@@ -1,4 +1,4 @@
-# cfins-devops-testing-api — the QA Workbench REST API (FastAPI on uvicorn).
+# qa-platform-api — the QA Workbench REST API (FastAPI on uvicorn).
 #
 # Build once, region/env-agnostic. ALL config comes from the environment (the
 # ECS task definition); NO secrets or AWS credentials are baked in — on ECS the

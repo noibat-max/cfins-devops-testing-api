@@ -1,4 +1,4 @@
-# API Surface — sample-qa-studio → cfins-devops-testing-api
+# API Surface — sample-qa-studio → qa-platform-api
 
 Extracted from the pinned sample (`v1.1.0` / `960d6fd`):
 `web-app/lib/api-stack.ts` (route table) + `web-app/lambdas/endpoints/*` (handlers,

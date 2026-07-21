@@ -1,4 +1,4 @@
-# cfins-devops-testing-api
+# qa-platform-api
 
 The Python **REST API (FastAPI on uvicorn)** for C&F's QA Workbench — the
 lift-and-shift target for `sample-qa-studio/web-app/lambdas` (API Gateway +

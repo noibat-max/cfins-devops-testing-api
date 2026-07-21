@@ -1,4 +1,4 @@
-# cfins-devops-testing-api — runtime dependencies
+# qa-platform-api — runtime dependencies
 # Pinned to majors that are current as of the port; lockfile/pip-tools can come later.
 fastapi>=0.110,<1.0
 uvicorn[standard]>=0.29,<1.0

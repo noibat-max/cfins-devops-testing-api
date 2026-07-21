@@ -1,10 +1,10 @@
 # The API on ECS + the Run Now trigger (Ops & Hand-off)
 
-This is the **API side** of remote execution: how the **`cfins-devops-testing-api`**
+This is the **API side** of remote execution: how the **`qa-platform-api`**
 service is deployed to ECS, and how its **`run_now`** mode launches a runner task via
 `ecs.run_task`. The **runner** (the worker image the task runs, its ECS task
 definition/roles, and how they're built/provisioned) is documented in the CLI repo:
-**`cfins-devops-testing-cli/docs/runner-ecs.md`** — this doc does not repeat it.
+**`qa-platform-cli/docs/runner-ecs.md`** — this doc does not repeat it.
 
 Verified in the dev account (`103930328611`, `us-east-1`) via the scoped `cfins-local` user.
 

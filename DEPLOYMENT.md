@@ -15,7 +15,7 @@ Verified end-to-end in the dev account (`103930328611`, `us-east-1`).
 Related docs:
 - **`docs/api-task-role-policy.json`** — the API task-role IAM policy (attach as-is).
 - **`docs/remote-execution-ecs.md`** — the `run_now` remote-execution trigger (API side).
-- **`cfins-devops-testing-cli/docs/runner-ecs.md`** — the runner image/task the API launches.
+- **`qa-platform-cli/docs/runner-ecs.md`** — the runner image/task the API launches.
 
 ---
 
@@ -188,13 +188,19 @@ secret grant. Two inputs (`app/config.py`, resolved in `main._resolve_jwt_sign_h
 On ECS you set **`JWT_SIGN_HASH_SECRET`** as a **plain env var** (it's an ARN, not
 the secret) and leave `JWT_SIGN_HASH` unset.
 
-1. Create one secret per environment holding a random 256-bit+ value — generate
-   it with `scripts/gen_jwt_secret.py` and store **only the value** in Secrets
-   Manager (never in git or the task def). **Name it under the workbench prefix**
-   (e.g. `cfins-qaworkbench/dev/jwt-sign-hash`) so the API's task role — which
-   already allows `GetSecretValue` on `cfins-qaworkbench*` (see
+1. Create one secret per environment with **`scripts/provision_jwt_secret.py`** —
+   it generates a random 256-bit+ value and stores it at
+   `<prefix>/<env>/jwt-sign-hash` (the value never leaves AWS; idempotent):
+
+   ```bash
+   AWS_PROFILE=<env-profile> AWS_REGION=us-east-1 ENVIRONMENT=dev \
+       python scripts/provision_jwt_secret.py     # prints the name to set
+   ```
+
+   The name sits under the `cfins-qaworkbench*` prefix, so the API's task role —
+   which already allows `GetSecretValue` on `cfins-qaworkbench*` (see
    `api-task-role-policy.json`) — can read it with **no policy change**.
-2. On the API task def, set `JWT_SIGN_HASH_SECRET=<that secret's ARN or name>`.
+2. On the API task def, set `JWT_SIGN_HASH_SECRET=<the printed name or ARN>`.
 3. Done — the task role's existing grant covers it. (Naming the secret *outside*
    the `cfins-qaworkbench*` prefix would require widening the task-role policy.)
 
