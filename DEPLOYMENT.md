@@ -82,6 +82,11 @@ trust). It grants:
 - `cfins-qaworkbench*` Secrets Manager (per-use-case secrets) + `ListSecrets`
 - `ecs:RunTask` on `cfins-qaworkbench-runner:*` **+** `iam:PassRole` on
   `cfins-qaworkbench-runner-*` — the `run_now` trigger (§ remote-execution doc)
+- `sqs:SendMessage` on `cfins-qaworkbench-executions` — enqueue for `queued`
+  ("Run later"); the dispatcher Lambda drains it (see the CLI repo's queued-execution doc)
+- `scheduler:{Create,Update,Delete,Get}Schedule` on the schedule group **+**
+  `iam:PassRole` on `cfins-qaworkbench-scheduler-target-role` — the `scheduled`
+  ("Run at a time") CRUD (see the CLI repo's scheduled-execution doc)
 
 ### Task-execution role (the ECS agent's identity)
 Needs the managed **`AmazonECSTaskExecutionRolePolicy`** (ECR pull + CloudWatch
@@ -126,23 +131,31 @@ required.
 | `JWT_ISSUER` | `iss` claim on minted tokens | `cfins-qaworkbench` | rarely changed |
 | `JWT_TTL_HOURS` | Token lifetime | `8` | |
 
-### Remote execution — required only to enable **"Run Now"**
-Leave **blank** to disable `run_now` (local CLI runs still work; the API returns a
-clear **400** if Run Now is called). Values come from the runner infra
-(`scripts/provision_ecs.py` output + the VPC).
+### Remote execution — to enable **"Run Now"** (immediate) and **"Run Later"** (queued)
+Leave **blank** to disable (local CLI runs still work; the API returns a clear
+**400** if a disabled mode is called). The `ECS_*`/`RUNNER_*` values come from the
+runner infra (`provision_ecs.py` in the CLI repo + the VPC); `QAWB_SQS_QUEUE_URL` from
+`provision_sqs.py` in this repo.
 
 | Var | Purpose | Default |
 |---|---|---|
-| `ECS_CLUSTER` | Cluster to launch runner tasks in | *(blank)* |
-| `RUNNER_TASK_DEFINITION` | Runner task def — **bare family** (DEV, latest rev) or **`family:rev`** (SAT/prod, pinned) | *(blank)* |
-| `RUNNER_SUBNETS` | Subnets for the runner task (CSV) | *(blank)* |
-| `RUNNER_SECURITY_GROUPS` | Security groups (CSV) | *(blank)* |
-| `RUNNER_LAUNCH_TYPE` | Launch type | `FARGATE` |
-| `RUNNER_ASSIGN_PUBLIC_IP` | Public IP for egress | `ENABLED` |
-| `RUNNER_CAPTURE` | Default artifact capture (`screenshots`\|`full`); per-run `capture` overrides | `screenshots` |
+| `QAWB_ECS_CLUSTER` | Cluster to launch runner tasks in | *(blank)* |
+| `QAWB_RUNNER_TASK_DEFINITION` | Runner task def — **bare family** (DEV, latest rev) or **`family:rev`** (SAT/prod, pinned) | *(blank)* |
+| `QAWB_RUNNER_SUBNETS` | Subnets for the runner task (CSV) | *(blank)* |
+| `QAWB_RUNNER_SECURITY_GROUPS` | Security groups (CSV) | *(blank)* |
+| `QAWB_RUNNER_LAUNCH_TYPE` | Launch type | `FARGATE` |
+| `QAWB_RUNNER_ASSIGN_PUBLIC_IP` | Public IP for egress | `ENABLED` |
+| `QAWB_RUNNER_CAPTURE` | Default artifact capture (`screenshots`\|`full`); per-run `capture` overrides | `screenshots` |
+| `QAWB_SQS_QUEUE_URL` | Work queue for **`queued`** ("Run later") — the dispatcher Lambda drains it | *(blank)* |
+| `QAWB_SCHEDULER_GROUP` | EventBridge Scheduler group for **`scheduled`** runs | `cfins-qaworkbench-qawb-schedules` |
+| `QAWB_SCHEDULER_FIRE_LAMBDA_ARN` | The fire-Lambda a schedule targets | *(blank)* |
+| `QAWB_SCHEDULER_TARGET_ROLE_ARN` | Role EventBridge Scheduler assumes to invoke the fire-Lambda | *(blank)* |
 
-`run_now` is enabled only when `ECS_CLUSTER` + `RUNNER_TASK_DEFINITION` +
-`RUNNER_SUBNETS` are all set. Full detail: **`docs/remote-execution-ecs.md`**.
+`run_now` needs `QAWB_ECS_CLUSTER` + `QAWB_RUNNER_TASK_DEFINITION` + `QAWB_RUNNER_SUBNETS`;
+`queued` needs `QAWB_SQS_QUEUE_URL`; `scheduled` needs `QAWB_SCHEDULER_FIRE_LAMBDA_ARN` +
+`QAWB_SCHEDULER_TARGET_ROLE_ARN`. Full detail: **`docs/remote-execution-ecs.md`**
+(Run Now), the CLI repo's **`docs/queued-execution.md`** (Run Later dispatcher)
+and **`docs/scheduled-execution.md`** (scheduling).
 
 ### SSO (Cognito) — optional
 Leave **blank** to disable SSO (local username/password login still works). These
@@ -164,10 +177,10 @@ Same image everywhere; these task-def values differ per environment:
 - `ENVIRONMENT`, `ARTIFACTS_BUCKET` (per-env bucket), `CORS_ORIGINS` (per-env UI URL)
 - `JWT_SIGN_HASH` secret ARN (**a distinct secret per environment**)
 - `COGNITO_*` (per-env user pool / client / domain)
-- `RUNNER_TASK_DEFINITION` — **bare family in DEV**, **pinned `:rev` in SAT/prod**
+- `QAWB_RUNNER_TASK_DEFINITION` — **bare family in DEV**, **pinned `:rev` in SAT/prod**
 - The **task role** and **execution role** ARNs (per-env, least-privilege)
 
-`WORKBENCH_TABLE`, `SECRET_PREFIX`, `AWS_REGION`, `RUNNER_LAUNCH_TYPE` are typically
+`WORKBENCH_TABLE`, `SECRET_PREFIX`, `AWS_REGION`, `QAWB_RUNNER_LAUNCH_TYPE` are typically
 constant across envs (each env is its own account/table if you isolate that way).
 
 ---
@@ -238,7 +251,7 @@ created the dev resources; they are the reference for what each environment need
 |---|---|
 | `provision_table.py` | DynamoDB `cfins-qaworkbench` (pk/sk + `suite-execution-index` GSI, on-demand) |
 | `provision_s3.py` | Per-env artifacts bucket `cfins-qaworkbench-<env>` |
-| `provision_ecs.py` | The **runner** cluster/roles/task-def (see the CLI repo doc) |
+| `provision_ecs.py` *(in `qa-platform-cli/scripts/`)* | The **runner** cluster/roles/task-def (see the CLI repo doc) |
 | `seed_auth.py` | Seed groups (admin/author/viewer) + an admin user |
 
 For prod, DevOps should reimplement these as IaC (CDK/Terraform) with per-env

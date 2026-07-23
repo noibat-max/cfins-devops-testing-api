@@ -75,3 +75,15 @@ def get_s3_client():
 def get_ecs_client():
     """ECS client for launching remote (run_now) worker tasks via ecs.run_task."""
     return _session().client("ecs")
+
+
+@functools.lru_cache
+def get_sqs_client():
+    """SQS client for enqueuing queued ('run later') executions."""
+    return _session().client("sqs")
+
+
+@functools.lru_cache
+def get_scheduler_client():
+    """EventBridge Scheduler client for managing scheduled executions."""
+    return _session().client("scheduler")

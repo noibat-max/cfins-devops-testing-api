@@ -13,7 +13,7 @@ Verified in the dev account (`103930328611`, `us-east-1`) via the scoped `cfins-
 ## 1. Flow (API's part)
 
 ```
-UI "Run Now"  ─POST /api/nova/usecase/{id}/execute {mode:"run_now", capture}─►  API (ECS Service)
+UI "Run Now"  ─POST /api/qawb/usecase/{id}/execute {mode:"run_now", capture}─►  API (ECS Service)
    (or suite)                                                                     │
                                     creates the execution record(s)               │
                                     ecs.run_task(cluster, taskDef, overrides:      │
@@ -24,8 +24,8 @@ UI "Run Now"  ─POST /api/nova/usecase/{id}/execute {mode:"run_now", capture}�
 The API **creates the execution record and calls `ecs.run_task`** — that's its whole role
 in a remote run. It does not run the browser or write artifacts; the runner task does
 (directly, via its own task role). A **suite** `run_now` launches **one task per member**
-(parallel). Code: `app/routers/nova/executions.py::_launch_ecs_task` (+ `execute`) and
-`app/routers/nova/suites.py::execute_test_suite`.
+(parallel). Code: `app/routers/qawb/executions.py::_launch_ecs_task` (+ `execute`) and
+`app/routers/qawb/suites.py::execute_test_suite`.
 
 ---
 

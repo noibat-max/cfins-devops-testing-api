@@ -11,12 +11,13 @@ Data model (single table):
   Step result pk="EXECUTION#<eid>"         sk="EXECUTION_STEP#<sid>"   (upserted)
   Artifact    pk="EXECUTION#<eid>"         sk="ARTIFACT#<aid>"         (+ S3 object)
 
-Deferred (remote / rich-capture / PROD): run_now/queued/scheduled modes, live
-view, video, downloads, events, step trace.
+Deferred (remote / rich-capture / PROD): scheduled mode, live view, video,
+downloads, events, step trace.
 """
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import uuid
 
@@ -25,12 +26,12 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from ...aws import get_ecs_client, get_s3_client, get_table
+from ...aws import get_ecs_client, get_s3_client, get_sqs_client, get_table
 from ...config import get_settings
 from ...security import Principal, require_scopes
 from ...serialization import to_jsonable
 
-logger = logging.getLogger("cfins.nova.executions")
+logger = logging.getLogger("cfins.qawb.executions")
 
 router = APIRouter(tags=["executions"])
 
@@ -48,7 +49,7 @@ EXEC_FIELDS = (
     "stopRequested", "taskArn", "capture",
 )
 
-VALID_MODES = {"local", "run_now"}
+VALID_MODES = {"local", "run_now", "queued"}
 VALID_CAPTURE = {"screenshots", "full"}
 STEP_FIELDS = (
     "stepId", "sort", "status", "startedAt", "endedAt",
@@ -111,7 +112,7 @@ class ExecuteRequest(BaseModel):
     mode: str = "local"
     trigger: str | None = None
     # run_now only: "screenshots" (default) or "full" (adds HTML trace + video).
-    # Falls back to the server's RUNNER_CAPTURE default when omitted.
+    # Falls back to the server's QAWB_RUNNER_CAPTURE default when omitted.
     capture: str | None = None
 
 
@@ -163,11 +164,31 @@ def _launch_ecs_task(usecase_id: str, eid: str, capture: str) -> str:
     return tasks[0]["taskArn"]
 
 
+def _enqueue_execution(usecase_id: str, eid: str, capture: str) -> None:
+    """Enqueue a queued ('run later') execution for the dispatcher to launch.
+
+    Sends {execution_id, usecase_id, capture} — the scheduled dispatcher Lambda
+    drains the queue and calls run_task (up to the concurrency cap). Body mirrors
+    _launch_ecs_task's container overrides. Raises 502 if the send fails.
+    """
+    body = json.dumps({"execution_id": eid, "usecase_id": usecase_id, "capture": capture})
+    try:
+        get_sqs_client().send_message(
+            QueueUrl=get_settings().sqs_queue_url,
+            MessageBody=body,
+        )
+    except ClientError as e:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            f"Failed to enqueue execution: {e.response['Error'].get('Message', str(e))}",
+        )
+
+
 @router.post("/usecase/{usecase_id}/execute", status_code=status.HTTP_201_CREATED)
 def execute(
     usecase_id: str,
     body: ExecuteRequest,
-    principal: Principal = Depends(require_scopes("api/nova/usecases.execute")),
+    principal: Principal = Depends(require_scopes("api/qawb/usecases.execute")),
 ) -> dict:
     """Create an execution record.
       * mode `local`   — record-only; the tester's CLI runs it and reports back.
@@ -180,25 +201,32 @@ def execute(
     if body.mode not in VALID_MODES:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"mode '{body.mode}' is not supported (use 'local' or 'run_now')",
+            f"mode '{body.mode}' is not supported (use 'local', 'run_now' or 'queued')",
         )
-    # Fail fast if run_now can't actually launch — before creating a dangling record.
+    # Both remote modes need a valid capture level and their backend configured —
+    # fail fast before creating a dangling record.
     capture = ""
-    if body.mode == "run_now":
-        if not get_settings().ecs_enabled:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "run_now is not configured on this server (no ECS cluster/task definition)",
-            )
-        capture = (body.capture or get_settings().runner_capture).lower()
+    if body.mode in ("run_now", "queued"):
+        s = get_settings()
+        capture = (body.capture or s.runner_capture).lower()
         if capture not in VALID_CAPTURE:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 f"capture must be one of {sorted(VALID_CAPTURE)}",
             )
+        if body.mode == "run_now" and not s.ecs_enabled:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "run_now is not configured on this server (no ECS cluster/task definition)",
+            )
+        if body.mode == "queued" and not s.queued_enabled:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "queued is not configured on this server (no SQS queue)",
+            )
 
     eid = str(uuid.uuid4())
-    default_trigger = "ui" if body.mode == "run_now" else "cli"
+    default_trigger = "cli" if body.mode == "local" else "ui"
     item = {
         "pk": f"USECASE_EXECUTION#{usecase_id}",
         "sk": f"EXECUTION#{eid}",
@@ -230,6 +258,18 @@ def execute(
                 ["taskArn = :ta"], {}, {":ta": task_arn})
         resp["taskArn"] = task_arn
         logger.info("execution %s launched on ECS (task=%s)", eid, task_arn)
+    elif body.mode == "queued":
+        try:
+            _enqueue_execution(usecase_id, eid, capture)
+        except HTTPException:
+            # Don't leave a dangling pending record if the enqueue failed.
+            _update(f"USECASE_EXECUTION#{usecase_id}", f"EXECUTION#{eid}",
+                    ["#s = :s", "errorMessage = :em", "endedAt = :e"],
+                    {"#s": "status"},
+                    {":s": "failed", ":em": "Failed to enqueue execution", ":e": _now()})
+            raise
+        logger.info("execution %s queued for usecase %s (trigger=%s)",
+                    eid, usecase_id, item["trigger"])
     else:
         logger.info("execution %s created for usecase %s (mode=local, trigger=%s)",
                     eid, usecase_id, item["trigger"])
@@ -239,7 +279,7 @@ def execute(
 @router.get("/usecase/{usecase_id}/executions")
 def list_executions(
     usecase_id: str,
-    _: Principal = Depends(require_scopes("api/nova/executions.read")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.read")),
 ) -> dict:
     items = _query_all(
         KeyConditionExpression=Key("pk").eq(f"USECASE_EXECUTION#{usecase_id}")
@@ -253,7 +293,7 @@ def list_executions(
 def get_execution(
     usecase_id: str,
     eid: str,
-    _: Principal = Depends(require_scopes("api/nova/executions.read")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.read")),
 ) -> dict:
     return _project(_get_execution_or_404(usecase_id, eid), EXEC_FIELDS)
 
@@ -262,7 +302,7 @@ def get_execution(
 def delete_execution(
     usecase_id: str,
     eid: str,
-    _: Principal = Depends(require_scopes("api/nova/executions.write")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.write")),
 ) -> dict:
     """Cascade: delete step + artifact items AND the artifacts' S3 objects."""
     _get_execution_or_404(usecase_id, eid)
@@ -293,7 +333,7 @@ def delete_execution(
 def stop_execution(
     usecase_id: str,
     eid: str,
-    _: Principal = Depends(require_scopes("api/nova/executions.write")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.write")),
 ) -> dict:
     """Cooperative stop: set stopRequested (the CLI honours it between steps).
 
@@ -325,7 +365,7 @@ def update_execution_status(
     usecase_id: str,
     eid: str,
     body: ExecStatusUpdate,
-    _: Principal = Depends(require_scopes("api/nova/executions.write")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.write")),
 ) -> dict:
     _get_execution_or_404(usecase_id, eid)
     if body.status not in EXEC_STATUSES:
@@ -362,7 +402,7 @@ def update_step_status(
     eid: str,
     step_id: str,
     body: StepStatusUpdate,
-    _: Principal = Depends(require_scopes("api/nova/executions.write")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.write")),
 ) -> dict:
     """Upsert a per-step result (no pre-created rows — read-live)."""
     _get_execution_or_404(usecase_id, eid)
@@ -401,7 +441,7 @@ def update_step_status(
 def list_execution_steps(
     usecase_id: str,
     eid: str,
-    _: Principal = Depends(require_scopes("api/nova/executions.read")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.read")),
 ) -> dict:
     _get_execution_or_404(usecase_id, eid)
     items = _query_all(
@@ -418,7 +458,7 @@ def get_execution_step(
     usecase_id: str,
     eid: str,
     step_id: str,
-    _: Principal = Depends(require_scopes("api/nova/executions.read")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.read")),
 ) -> dict:
     item = get_table().get_item(
         Key={"pk": f"EXECUTION#{eid}", "sk": f"EXECUTION_STEP#{step_id}"}
@@ -444,8 +484,9 @@ def _mint_artifact(usecase_id: str, eid: str, body: ArtifactCreate, step_id: str
 
     aid = str(uuid.uuid4())
     # Path: executions/nova/<date>/<eid>/<file>.
-    #  - "nova" segregates this app's runs (mirrors the /api/nova route + scope
-    #    namespacing); future apps get executions/<app>/...
+    #  - the "nova" segment is this app's S3-storage namespace; kept as "nova"
+    #    (NOT renamed with the /api/qawb route) so existing artifacts stay
+    #    addressable. API + CLI (DirectAwsClient) share this exact key format.
     #  - <date> partitions by run day so developers can narrow browsing and
     #    lifecycle rules can expire old runs by prefix.
     #  - date comes from the execution's createdAt (NOT "now"), so every artifact
@@ -483,7 +524,7 @@ def create_execution_artifact(
     usecase_id: str,
     eid: str,
     body: ArtifactCreate,
-    _: Principal = Depends(require_scopes("api/nova/executions.write")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.write")),
 ) -> dict:
     return _mint_artifact(usecase_id, eid, body, step_id=None)
 
@@ -497,7 +538,7 @@ def create_step_artifact(
     eid: str,
     step_id: str,
     body: ArtifactCreate,
-    _: Principal = Depends(require_scopes("api/nova/executions.write")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.write")),
 ) -> dict:
     return _mint_artifact(usecase_id, eid, body, step_id=step_id)
 
@@ -513,7 +554,7 @@ def confirm_artifact(
     eid: str,
     aid: str,
     body: ArtifactConfirm,
-    _: Principal = Depends(require_scopes("api/nova/executions.write")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.write")),
 ) -> dict:
     key = {"pk": f"EXECUTION#{eid}", "sk": f"ARTIFACT#{aid}"}
     if not get_table().get_item(Key=key).get("Item"):
@@ -534,7 +575,7 @@ def confirm_artifact(
 def list_artifacts(
     usecase_id: str,
     eid: str,
-    _: Principal = Depends(require_scopes("api/nova/executions.read")),
+    _: Principal = Depends(require_scopes("api/qawb/executions.read")),
 ) -> dict:
     _get_execution_or_404(usecase_id, eid)
     items = _query_all(

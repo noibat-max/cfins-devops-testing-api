@@ -9,15 +9,17 @@ from __future__ import annotations
 
 SCOPE_CATALOG: list[dict] = [
     {"scope": "api/admin", "description": "Full access — inherits every scope"},
-    {"scope": "api/nova/usecases.read", "description": "View use cases and steps"},
-    {"scope": "api/nova/usecases.write", "description": "Create and edit use cases and steps"},
-    {"scope": "api/nova/usecases.execute", "description": "Run use cases"},
-    {"scope": "api/nova/templates.read", "description": "View templates"},
-    {"scope": "api/nova/templates.write", "description": "Create and edit templates"},
-    {"scope": "api/nova/executions.read", "description": "View executions and results"},
-    {"scope": "api/nova/executions.write", "description": "Manage executions (stop, artifacts)"},
-    {"scope": "api/nova/suite.read", "description": "View test suites"},
-    {"scope": "api/nova/suite.write", "description": "Create, edit and run test suites"},
+    {"scope": "api/qawb/usecases.read", "description": "View use cases and steps"},
+    {"scope": "api/qawb/usecases.write", "description": "Create and edit use cases and steps"},
+    {"scope": "api/qawb/usecases.execute", "description": "Run use cases"},
+    {"scope": "api/qawb/templates.read", "description": "View templates"},
+    {"scope": "api/qawb/templates.write", "description": "Create and edit templates"},
+    {"scope": "api/qawb/executions.read", "description": "View executions and results"},
+    {"scope": "api/qawb/executions.write", "description": "Manage executions (stop, artifacts)"},
+    {"scope": "api/qawb/suite.read", "description": "View test suites"},
+    {"scope": "api/qawb/suite.write", "description": "Create, edit and run test suites"},
+    {"scope": "api/qawb/schedules.read", "description": "View schedules"},
+    {"scope": "api/qawb/schedules.write", "description": "Create, edit and delete schedules"},
 ]
 
 VALID_SCOPES = {s["scope"] for s in SCOPE_CATALOG}

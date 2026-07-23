@@ -29,17 +29,17 @@ from ...serialization import to_jsonable
 from .config import read_variables, write_variables
 from .steps import ReorderRequest, StepCreate, StepUpdate, _OPTIONAL_STEP_FIELDS
 
-logger = logging.getLogger("cfins.nova.templates")
+logger = logging.getLogger("cfins.qawb.templates")
 
 router = APIRouter(tags=["templates"])
 
 DEFAULT_REGION = "us-east-1"
 DEFAULT_MODEL = "nova-act-v1.0"
 
-READ = require_scopes("api/nova/templates.read")
-WRITE = require_scopes("api/nova/templates.write")
+READ = require_scopes("api/qawb/templates.read")
+WRITE = require_scopes("api/qawb/templates.write")
 # apply/import both read a template AND write a use case → require both scopes.
-APPLY = require_scopes("api/nova/templates.read", "api/nova/usecases.write")
+APPLY = require_scopes("api/qawb/templates.read", "api/qawb/usecases.write")
 
 _TEMPLATE_FIELDS = ("id", "name", "description", "created_at", "created_by", "version")
 
@@ -379,7 +379,7 @@ def _usecase_steps(usecase_id: str) -> list[dict]:
 
 @router.get(
     "/usecase/{usecase_id}/template-updates",
-    dependencies=[Depends(require_scopes("api/nova/templates.read"))],
+    dependencies=[Depends(require_scopes("api/qawb/templates.read"))],
 )
 def template_updates(usecase_id: str) -> dict:
     """Diff a use case's template-derived steps against their source templates:

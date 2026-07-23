@@ -50,20 +50,43 @@ class Settings:
     # Empty when remote runs aren't wired → `run_now` returns a clear 400. Prefer
     # a bare family name for DEV (latest revision) and a pinned family:revision
     # for SAT/prod (so a new task-def registration can't silently change prod).
-    ecs_cluster: str = os.environ.get("ECS_CLUSTER", "")
-    runner_task_definition: str = os.environ.get("RUNNER_TASK_DEFINITION", "")
-    runner_subnets: list[str] = _split_csv(os.environ.get("RUNNER_SUBNETS", ""))
-    runner_security_groups: list[str] = _split_csv(os.environ.get("RUNNER_SECURITY_GROUPS", ""))
-    runner_launch_type: str = os.environ.get("RUNNER_LAUNCH_TYPE", "FARGATE")
-    runner_assign_public_ip: str = os.environ.get("RUNNER_ASSIGN_PUBLIC_IP", "ENABLED")
+    ecs_cluster: str = os.environ.get("QAWB_ECS_CLUSTER", "")
+    runner_task_definition: str = os.environ.get("QAWB_RUNNER_TASK_DEFINITION", "")
+    runner_subnets: list[str] = _split_csv(os.environ.get("QAWB_RUNNER_SUBNETS", ""))
+    runner_security_groups: list[str] = _split_csv(os.environ.get("QAWB_RUNNER_SECURITY_GROUPS", ""))
+    runner_launch_type: str = os.environ.get("QAWB_RUNNER_LAUNCH_TYPE", "FARGATE")
+    runner_assign_public_ip: str = os.environ.get("QAWB_RUNNER_ASSIGN_PUBLIC_IP", "ENABLED")
     # Default artifact capture for remote (run_now) runs: "screenshots" (per-step
     # PNGs) or "full" (adds HTML trace + video to S3). A per-run `capture` in the
     # execute request overrides this.
-    runner_capture: str = os.environ.get("RUNNER_CAPTURE", "screenshots")
+    runner_capture: str = os.environ.get("QAWB_RUNNER_CAPTURE", "screenshots")
 
     @property
     def ecs_enabled(self) -> bool:
         return bool(self.ecs_cluster and self.runner_task_definition and self.runner_subnets)
+
+    # --- SQS (queued / "run later" execution) ---
+    # When set, mode `queued` enqueues {execution_id, usecase_id, capture} here;
+    # the scheduled dispatcher Lambda drains it and launches runner tasks up to
+    # the concurrency cap. Empty → `queued` returns a clear 400 (local/run_now
+    # still work). Config, not a secret.
+    sqs_queue_url: str = os.environ.get("QAWB_SQS_QUEUE_URL", "")
+
+    @property
+    def queued_enabled(self) -> bool:
+        return bool(self.sqs_queue_url)
+
+    # --- EventBridge Scheduler (scheduled / "run at a time" execution) ---
+    # A schedule targets a "fire" Lambda that creates the execution + enqueues to
+    # SQS (throttled by the dispatcher). One schedule group per hosted app.
+    # Config, not secrets. Empty ARNs → scheduling returns a clear 400.
+    scheduler_group: str = os.environ.get("QAWB_SCHEDULER_GROUP", "cfins-qaworkbench-qawb-schedules")
+    scheduler_fire_lambda_arn: str = os.environ.get("QAWB_SCHEDULER_FIRE_LAMBDA_ARN", "")
+    scheduler_target_role_arn: str = os.environ.get("QAWB_SCHEDULER_TARGET_ROLE_ARN", "")
+
+    @property
+    def scheduler_enabled(self) -> bool:
+        return bool(self.scheduler_fire_lambda_arn and self.scheduler_target_role_arn)
 
     # --- Auth / JWT ---
     # HS256 signing key, supplied one of two ways (the direct value wins):

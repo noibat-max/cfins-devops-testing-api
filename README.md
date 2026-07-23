@@ -16,7 +16,7 @@ app/
   audit.py      records every mutating request (payload redacted) to DynamoDB
   routers/
     shell/      app-agnostic platform: auth, apps, users, groups, tokens, audit  (mounted /api)
-    nova/       Nova Act QA Studio: usecases, steps, config, executions, templates, suites  (mounted /api/nova)
+    nova/       Nova Act QA Studio: usecases, steps, config, executions, templates, suites  (mounted /api/qawb)
 scripts/        provisioning + seed tooling (local-only, excluded from image)
 docs/           api-surface.md, remote-execution-ecs.md, api-task-role-policy.json
 run-local.sh    load .env → uvicorn --reload on :8000

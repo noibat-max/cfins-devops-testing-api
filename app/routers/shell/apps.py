@@ -1,8 +1,8 @@
 """Application catalog for the workbench landing page.
 
-Hardcoded for now (parity with the retired mock). When there's an app-management
-screen this moves to a data-driven catalog in DynamoDB. No auth required — the
-landing page fetches this to render the app cards.
+Hardcoded for now. When there's an app-management screen this moves to a
+data-driven catalog in DynamoDB. No auth required — the landing page fetches
+this to render the app cards.
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ class WorkbenchApp(BaseModel):
 _APPS: list[WorkbenchApp] = [
     WorkbenchApp(
         id="qa-studio",
-        name="Nova Act QA Studio",
-        shortName="QA Studio",
+        name="QA Workbench - Nova Act",
+        shortName="QA Workbench",
         description=(
             "Agentic, plain-English UI testing. Amazon Nova Act drives a managed "
             "browser to execute and validate test steps."

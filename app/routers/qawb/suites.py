@@ -7,7 +7,7 @@ collection of use cases you later run as one batch. Single-table:
 
 Deviations from sample-qa-studio (approved):
   * The per-suite `scope` field (sample's `suite:<name>` for per-suite authZ) is
-    DROPPED — we authorize at the app level via api/nova/suite.read/write, like
+    DROPPED — we authorize at the app level via api/qawb/suite.read/write, like
     we dropped OAuth Clients. Suites are just name/description/tags.
   * Membership resolves use-case details (name/active) LIVE on read, so renames
     stay current and a deleted use case surfaces as `missing` rather than stale.
@@ -28,10 +28,10 @@ from pydantic import BaseModel
 from ...aws import get_s3_client, get_table
 from ...config import get_settings
 from ...security import Principal, require_scopes
-from .executions import VALID_CAPTURE, _launch_ecs_task
+from .executions import VALID_CAPTURE, _enqueue_execution, _launch_ecs_task
 from ...serialization import to_jsonable
 
-logger = logging.getLogger("cfins.nova.suites")
+logger = logging.getLogger("cfins.qawb.suites")
 
 router = APIRouter(tags=["suites"])
 
@@ -226,7 +226,7 @@ class AddUsecasesRequest(BaseModel):
 
 @router.get(
     "/test-suites",
-    dependencies=[Depends(require_scopes("api/nova/suite.read"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.read"))],
 )
 def list_test_suites() -> dict:
     resp = get_table().query(
@@ -241,7 +241,7 @@ def list_test_suites() -> dict:
 @router.post("/test-suites", status_code=status.HTTP_201_CREATED)
 def create_test_suite(
     body: SuiteCreate,
-    principal: Principal = Depends(require_scopes("api/nova/suite.write")),
+    principal: Principal = Depends(require_scopes("api/qawb/suite.write")),
 ) -> dict:
     name = body.name.strip()
     if not name:
@@ -268,7 +268,7 @@ def create_test_suite(
 
 @router.get(
     "/test-suites/{suite_id}",
-    dependencies=[Depends(require_scopes("api/nova/suite.read"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.read"))],
 )
 def get_test_suite(suite_id: str) -> dict:
     item = _get_suite_item(suite_id)
@@ -278,7 +278,7 @@ def get_test_suite(suite_id: str) -> dict:
 
 @router.put(
     "/test-suites/{suite_id}",
-    dependencies=[Depends(require_scopes("api/nova/suite.write"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.write"))],
 )
 def update_test_suite(suite_id: str, body: SuiteUpdate) -> dict:
     _validate_suite_fields(body.name, body.description)
@@ -307,7 +307,7 @@ def update_test_suite(suite_id: str, body: SuiteUpdate) -> dict:
 
 @router.delete(
     "/test-suites/{suite_id}",
-    dependencies=[Depends(require_scopes("api/nova/suite.write"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.write"))],
 )
 def delete_test_suite(suite_id: str) -> dict:
     table = get_table()
@@ -329,7 +329,7 @@ def delete_test_suite(suite_id: str) -> dict:
 
 @router.get(
     "/test-suites/{suite_id}/usecases",
-    dependencies=[Depends(require_scopes("api/nova/suite.read"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.read"))],
 )
 def list_suite_usecases(suite_id: str) -> dict:
     _get_suite_item(suite_id)  # 404 if missing
@@ -354,12 +354,12 @@ def list_suite_usecases(suite_id: str) -> dict:
 
 @router.post(
     "/test-suites/{suite_id}/usecases",
-    dependencies=[Depends(require_scopes("api/nova/suite.write"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.write"))],
 )
 def add_usecases_to_suite(
     suite_id: str,
     body: AddUsecasesRequest,
-    principal: Principal = Depends(require_scopes("api/nova/suite.write")),
+    principal: Principal = Depends(require_scopes("api/qawb/suite.write")),
 ) -> dict:
     _get_suite_item(suite_id)  # 404 if missing
     table = get_table()
@@ -407,7 +407,7 @@ def add_usecases_to_suite(
 
 @router.delete(
     "/test-suites/{suite_id}/usecases/{usecase_id}",
-    dependencies=[Depends(require_scopes("api/nova/suite.write"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.write"))],
 )
 def remove_usecase_from_suite(suite_id: str, usecase_id: str) -> dict:
     _get_suite_item(suite_id)  # 404 if missing
@@ -432,7 +432,7 @@ class SuiteExecuteRequest(BaseModel):
 def execute_test_suite(
     suite_id: str,
     body: SuiteExecuteRequest,
-    principal: Principal = Depends(require_scopes("api/nova/suite.write")),
+    principal: Principal = Depends(require_scopes("api/qawb/suite.write")),
 ) -> dict:
     """Run a suite = the same "one endpoint, per-member execution" seam as §5.
 
@@ -444,22 +444,27 @@ def execute_test_suite(
       parallel headless via the task role.
     """
     suite = _get_suite_item(suite_id)
-    if body.mode not in ("local", "run_now"):
+    if body.mode not in ("local", "run_now", "queued"):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            f"mode '{body.mode}' is not supported (use 'local' or 'run_now')",
+            f"mode '{body.mode}' is not supported (use 'local', 'run_now' or 'queued')",
         )
     capture = ""
-    if body.mode == "run_now":
+    if body.mode in ("run_now", "queued"):
         s = get_settings()
-        if not s.ecs_enabled:
+        capture = (body.capture or s.runner_capture).lower()
+        if capture not in VALID_CAPTURE:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"capture must be one of {sorted(VALID_CAPTURE)}")
+        if body.mode == "run_now" and not s.ecs_enabled:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 "run_now is not configured on this server (no ECS cluster/task definition)",
             )
-        capture = (body.capture or s.runner_capture).lower()
-        if capture not in VALID_CAPTURE:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"capture must be one of {sorted(VALID_CAPTURE)}")
+        if body.mode == "queued" and not s.queued_enabled:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "queued is not configured on this server (no SQS queue)",
+            )
 
     table = get_table()
     runnable: list[tuple[str, str]] = []
@@ -515,6 +520,7 @@ def execute_test_suite(
     )
 
     launched = 0
+    queued_count = 0
     if body.mode == "run_now":
         # One Fargate task per member (they run in parallel). A launch failure
         # marks just that member failed — the rest still go.
@@ -535,18 +541,35 @@ def execute_test_suite(
                     ExpressionAttributeNames={"#s": "status"},
                     ExpressionAttributeValues={":s": "failed", ":em": "Failed to launch ECS task", ":e": _now_z()},
                 )
+    elif body.mode == "queued":
+        # Enqueue one message per member — the dispatcher launches them up to the
+        # concurrency cap. A per-member enqueue failure marks just that member failed.
+        for r in roster:
+            try:
+                _enqueue_execution(r["usecaseId"], r["executionId"], capture)
+                queued_count += 1
+            except HTTPException as e:
+                logger.error("suite %s: enqueue failed for member %s: %s", suite_id, r["usecaseId"], e.detail)
+                table.update_item(
+                    Key={"pk": f"USECASE_EXECUTION#{r['usecaseId']}", "sk": f"EXECUTION#{r['executionId']}"},
+                    UpdateExpression="SET #s = :s, errorMessage = :em, endedAt = :e",
+                    ExpressionAttributeNames={"#s": "status"},
+                    ExpressionAttributeValues={":s": "failed", ":em": "Failed to enqueue execution", ":e": _now_z()},
+                )
 
-    logger.info("suite %s executed -> run %s (mode=%s, %d member(s), %d skipped, %d launched)",
-                suite_id, se_id, body.mode, len(runnable), len(skipped), launched)
+    logger.info("suite %s executed -> run %s (mode=%s, %d member(s), %d skipped, %d launched, %d queued)",
+                suite_id, se_id, body.mode, len(runnable), len(skipped), launched, queued_count)
     out = {"suiteExecutionId": se_id, "executions": roster, "total": len(runnable), "skipped": skipped, "mode": body.mode}
     if body.mode == "run_now":
         out["launched"] = launched
+    elif body.mode == "queued":
+        out["queued"] = queued_count
     return out
 
 
 @router.get(
     "/test-suites/{suite_id}/executions",
-    dependencies=[Depends(require_scopes("api/nova/suite.read"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.read"))],
 )
 def list_suite_executions(suite_id: str) -> dict:
     _get_suite_item(suite_id)  # 404 if missing
@@ -569,7 +592,7 @@ def list_suite_executions(suite_id: str) -> dict:
 
 @router.get(
     "/test-suites/{suite_id}/executions/{se_id}",
-    dependencies=[Depends(require_scopes("api/nova/suite.read"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.read"))],
 )
 def get_suite_execution(suite_id: str, se_id: str) -> dict:
     se = _get_suite_exec_or_404(suite_id, se_id)
@@ -603,7 +626,7 @@ def get_suite_execution(suite_id: str, se_id: str) -> dict:
 
 @router.delete(
     "/test-suites/{suite_id}/executions/{se_id}",
-    dependencies=[Depends(require_scopes("api/nova/suite.write"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.write"))],
 )
 def delete_suite_execution(suite_id: str, se_id: str) -> dict:
     _get_suite_exec_or_404(suite_id, se_id)
@@ -615,7 +638,7 @@ def delete_suite_execution(suite_id: str, se_id: str) -> dict:
 
 @router.post(
     "/test-suites/{suite_id}/executions/{se_id}/stop",
-    dependencies=[Depends(require_scopes("api/nova/suite.write"))],
+    dependencies=[Depends(require_scopes("api/qawb/suite.write"))],
 )
 def stop_suite_execution(suite_id: str, se_id: str) -> dict:
     """Cooperative stop: flag every not-yet-finished member. The local runner

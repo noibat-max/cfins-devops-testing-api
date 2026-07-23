@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .audit import AuditMiddleware
 from .config import get_settings
 from .logging_config import RequestLogMiddleware, configure_logging
-from .routers.nova import config, executions, steps, suites, templates, usecases
+from .routers.qawb import config, executions, schedules, steps, suites, templates, usecases
 from .routers.shell import apps, audit, auth, groups, tokens, users
 
 settings = get_settings()
@@ -82,11 +82,11 @@ async def _log_validation_error(request: Request, exc: RequestValidationError):
 
 # Route namespacing (app-owns-/api): every functional route is served under
 # `/api`; each hosted application gets its own second segment. QA Studio (Nova
-# Act) lives under `/api/nova`; the workbench shell (auth, apps, admin, tokens)
+# Act) lives under `/api/qawb`; the workbench shell (auth, apps, admin, tokens)
 # is app-agnostic and sits directly under `/api`. `/health` + `/docs` stay at
 # root (load-balancer / Swagger convention). Future apps: `/api/dlt`, ...
 API = "/api"
-NOVA = f"{API}/nova"
+NOVA = f"{API}/qawb"
 
 # Workbench shell — app-agnostic platform routes.
 app.include_router(auth.router, prefix=API)
@@ -103,6 +103,7 @@ app.include_router(config.router, prefix=NOVA)
 app.include_router(executions.router, prefix=NOVA)
 app.include_router(templates.router, prefix=NOVA)
 app.include_router(suites.router, prefix=NOVA)
+app.include_router(schedules.router, prefix=NOVA)
 
 
 def _resolve_jwt_sign_hash() -> None:
